@@ -1,8 +1,35 @@
 import type { Config } from "./config.ts";
 
-export interface Message {
-  role: "system" | "user" | "assistant";
-  content: string;
+export interface ToolCall {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+}
+
+/** 喂给模型的工具声明。 */
+export interface ToolSchema {
+  type: "function";
+  function: { name: string; description: string; parameters: unknown };
+}
+
+export type Message =
+  | { role: "system" | "user"; content: string }
+  | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
+  | { role: "tool"; tool_call_id: string; content: string };
+
+/**
+ * 一条消息在上下文里占的文本量。
+ * assistant 发起工具调用的那一轮 content 可能是 null,占用落在 tool_calls 上,
+ * 所以两边都要算 —— 压缩靠这个数切边界。
+ */
+export function contentLength(message: Message): number {
+  const own = message.content?.length ?? 0;
+  if (message.role !== "assistant" || !message.tool_calls) return own;
+
+  return message.tool_calls.reduce(
+    (sum, call) => sum + call.function.name.length + call.function.arguments.length,
+    own,
+  );
 }
 
 /** /chat/completions 的用量统计。各家 OpenAI 兼容实现的字段并不一致,
@@ -19,18 +46,37 @@ export interface Usage {
 
 export interface ChatResult {
   reply: string;
+  /** 模型这一轮要求调用的工具,可能一次要好几个。 */
+  toolCalls: ToolCall[];
+  finishReason: string | null;
   /** 服务端没返回用量时为 null。 */
   usage: Usage | null;
 }
 
 /** 流式响应里一条 SSE data 行的形状(只取用得到的字段)。 */
 interface StreamChunk {
-  choices?: Array<{ delta?: { content?: string | null } }>;
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
   usage?: Usage;
 }
 
 interface ErrorBody {
   error?: { message?: string };
+}
+
+export interface StreamOptions {
+  onDelta?: (text: string) => void;
+  tools?: ToolSchema[];
 }
 
 /** 把字节流按行切开 —— SSE 的一个事件可能被拆在多个 chunk 里。 */
@@ -64,12 +110,15 @@ function describeFailure(status: number, raw: string): string {
 
 /**
  * 以 OpenAI 格式调用 /chat/completions,边收边把增量文本交给 onDelta。
- * 返回完整回复,方便调用方存进上下文。
+ *
+ * 工具调用的参数是**一个片段一个片段**流过来的(实测 `{"city": "杭州"}` 这种
+ * 短参数会拆成十几个 delta),所以必须按 index 累加拼装;流没结束时参数是不完整的,
+ * 不能边收边执行。
  */
 export async function streamChat(
   config: Config,
   messages: Message[],
-  onDelta: (text: string) => void,
+  options: StreamOptions = {},
 ): Promise<ChatResult> {
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
@@ -81,6 +130,7 @@ export async function streamChat(
       model: config.model,
       messages,
       stream: true,
+      ...(options.tools?.length ? { tools: options.tools } : {}),
     }),
   });
 
@@ -93,6 +143,8 @@ export async function streamChat(
 
   let reply = "";
   let usage: Usage | null = null;
+  let finishReason: string | null = null;
+  const pending = new Map<number, { id: string; name: string; arguments: string }>();
 
   for await (const line of readLines(response.body)) {
     if (!line.startsWith("data:")) continue;
@@ -105,12 +157,37 @@ export async function streamChat(
     // 用量只在收尾的 chunk 上出现一次,一路覆盖留下最后那个
     if (chunk.usage) usage = chunk.usage;
 
-    const delta = chunk.choices?.[0]?.delta?.content;
-    if (delta) {
-      reply += delta;
-      onDelta(delta);
+    const choice = chunk.choices?.[0];
+    if (choice?.finish_reason) finishReason = choice.finish_reason;
+
+    const delta = choice?.delta;
+    if (!delta) continue;
+
+    if (delta.content) {
+      reply += delta.content;
+      options.onDelta?.(delta.content);
+    }
+
+    for (const fragment of delta.tool_calls ?? []) {
+      const index = fragment.index ?? 0;
+      const call = pending.get(index) ?? { id: "", name: "", arguments: "" };
+
+      // 首片段带 id/name,后续片段只续 arguments
+      if (fragment.id) call.id = fragment.id;
+      if (fragment.function?.name) call.name = fragment.function.name;
+      if (fragment.function?.arguments) call.arguments += fragment.function.arguments;
+
+      pending.set(index, call);
     }
   }
 
-  return { reply, usage };
+  const toolCalls: ToolCall[] = [...pending.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([, call]) => ({
+      id: call.id,
+      type: "function",
+      function: { name: call.name, arguments: call.arguments },
+    }));
+
+  return { reply, toolCalls, finishReason, usage };
 }

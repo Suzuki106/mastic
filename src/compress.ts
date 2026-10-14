@@ -1,5 +1,5 @@
 import type { Config } from "./config.ts";
-import { streamChat, type Message } from "./llm.ts";
+import { contentLength, streamChat, type Message } from "./llm.ts";
 
 /** 摘要指令。摘要长度不设硬上限,靠这里的要求来约束。 */
 const SUMMARY_PROMPT = `你是对话压缩器。把给你的对话记录压缩成一份摘要。
@@ -49,7 +49,7 @@ export function splitForCompaction(
   const body = messages.slice(1);
   if (body.length === 0) return { keep: [], fold: [] };
 
-  const chars = body.map((m) => m.content.length);
+  const chars = body.map(contentLength);
   const totalChars = chars.reduce((sum, n) => sum + n, 0);
 
   if (totalChars === 0 || totalTokens <= 0 || keepRecentTokens >= totalTokens) {
@@ -75,7 +75,20 @@ export function splitForCompaction(
 }
 
 function transcript(messages: Message[]): string {
-  return messages.map((m) => `${m.role}: ${m.content}`).join("\n\n");
+  return messages
+    .map((message) => {
+      if (message.role === "tool") return `tool: ${message.content}`;
+
+      if (message.role === "assistant" && message.tool_calls?.length) {
+        const calls = message.tool_calls
+          .map((call) => `${call.function.name}(${call.function.arguments})`)
+          .join(", ");
+        return `assistant: ${message.content ?? ""}[调用工具: ${calls}]`;
+      }
+
+      return `${message.role}: ${message.content ?? ""}`;
+    })
+    .join("\n\n");
 }
 
 /** 把待折叠的部分交给模型做摘要,返回摘要正文。 */
@@ -86,7 +99,6 @@ export async function summarise(config: Config, fold: Message[]): Promise<string
       { role: "system", content: SUMMARY_PROMPT },
       { role: "user", content: transcript(fold) },
     ],
-    () => {},
   );
   return reply.trim();
 }

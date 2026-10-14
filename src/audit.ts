@@ -25,6 +25,39 @@ function read(usage: Usage): TurnUsage {
   };
 }
 
+/**
+ * 一个用户轮次可能触发 N 次请求(工具循环),账本按轮次汇总、而不是按请求,
+ * 否则一次提问会在屏幕上跳出好几行 tokens。
+ */
+export function mergeUsage(usages: Usage[]): Usage {
+  const sum = (pick: (u: Usage) => number | undefined): number =>
+    usages.reduce((total, u) => total + (pick(u) ?? 0), 0);
+
+  // 只有确实有输入提供过这个字段才写值。全都没有就留 undefined ——
+  // 写成 0 会被 read() 里的 `a ?? b` 当成"服务端说了 0",把另一路缓存字段盖掉。
+  const sumIfPresent = (pick: (u: Usage) => number | undefined): number | undefined => {
+    const present = usages.filter((u) => pick(u) !== undefined);
+    return present.length === 0 ? undefined : present.reduce((t, u) => t + (pick(u) ?? 0), 0);
+  };
+
+  const merged: Usage = {
+    prompt_tokens: sum((u) => u.prompt_tokens),
+    completion_tokens: sum((u) => u.completion_tokens),
+    total_tokens: sum((u) => u.total_tokens),
+  };
+
+  const hit = sumIfPresent((u) => u.prompt_cache_hit_tokens);
+  if (hit !== undefined) merged.prompt_cache_hit_tokens = hit;
+
+  const cached = sumIfPresent((u) => u.prompt_tokens_details?.cached_tokens);
+  if (cached !== undefined) merged.prompt_tokens_details = { cached_tokens: cached };
+
+  const reasoning = sumIfPresent((u) => u.completion_tokens_details?.reasoning_tokens);
+  if (reasoning !== undefined) merged.completion_tokens_details = { reasoning_tokens: reasoning };
+
+  return merged;
+}
+
 export interface AuditTotals {
   turns: number;
   prompt: number;
