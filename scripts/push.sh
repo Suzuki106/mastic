@@ -19,13 +19,26 @@ cd "$(git rev-parse --show-toplevel)"
 # 问用户名密码,而在非交互环境里那就是无限期挂住。
 helper='!f() { echo username=x-access-token; echo password="$GH_TOKEN"; }; f'
 attempts=3
+attempt_timeout=60
 
+# github 连不上时,git 要干等约 135 秒才报错(实测),三轮就是 7 分钟。
+# git 2.43 没有 http.connectTimeout —— 它只有 http.lowSpeedLimit/lowSpeedTime,
+# 那两个管的是"传输停滞",不是"连接建立",对这种情况不起作用。所以用 timeout 兜。
 for attempt in $(seq 1 "$attempts"); do
-  if git -c credential.helper="$helper" -c credential.interactive=never push origin main; then
+  if timeout "$attempt_timeout" \
+       git -c credential.helper="$helper" -c credential.interactive=never push origin main; then
     exit 0
+  else
+    # 在 else 里 $? 才是上面那条命令的退出码(if 语句本身没有 else 时返回 0)
+    status=$?
   fi
 
-  echo "推送失败(第 ${attempt}/${attempts} 次)" >&2
+  if [ "$status" -eq 124 ]; then
+    echo "推送超时(第 ${attempt}/${attempts} 次,超过 ${attempt_timeout}s)" >&2
+  else
+    echo "推送失败(第 ${attempt}/${attempts} 次,退出码 ${status})" >&2
+  fi
+
   if [ "$attempt" -lt "$attempts" ]; then
     sleep 3
   fi
