@@ -5,9 +5,28 @@ export interface Message {
   content: string;
 }
 
+/** /chat/completions 的用量统计。各家 OpenAI 兼容实现的字段并不一致,
+ *  所以除了三个基本项,其余一律按可选处理,缺了就按 0 记。 */
+export interface Usage {
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+  completion_tokens_details?: { reasoning_tokens?: number };
+  prompt_cache_hit_tokens?: number;
+  prompt_cache_miss_tokens?: number;
+}
+
+export interface ChatResult {
+  reply: string;
+  /** 服务端没返回用量时为 null。 */
+  usage: Usage | null;
+}
+
 /** 流式响应里一条 SSE data 行的形状(只取用得到的字段)。 */
 interface StreamChunk {
   choices?: Array<{ delta?: { content?: string | null } }>;
+  usage?: Usage;
 }
 
 interface ErrorBody {
@@ -51,7 +70,7 @@ export async function streamChat(
   config: Config,
   messages: Message[],
   onDelta: (text: string) => void,
-): Promise<string> {
+): Promise<ChatResult> {
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
@@ -73,6 +92,7 @@ export async function streamChat(
   }
 
   let reply = "";
+  let usage: Usage | null = null;
 
   for await (const line of readLines(response.body)) {
     if (!line.startsWith("data:")) continue;
@@ -82,6 +102,9 @@ export async function streamChat(
     if (!payload) continue;
 
     const chunk = JSON.parse(payload) as StreamChunk;
+    // 用量只在收尾的 chunk 上出现一次,一路覆盖留下最后那个
+    if (chunk.usage) usage = chunk.usage;
+
     const delta = chunk.choices?.[0]?.delta?.content;
     if (delta) {
       reply += delta;
@@ -89,5 +112,5 @@ export async function streamChat(
     }
   }
 
-  return reply;
+  return { reply, usage };
 }

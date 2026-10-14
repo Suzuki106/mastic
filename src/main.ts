@@ -1,5 +1,6 @@
 import { stdin, stdout } from "node:process";
 import { createInterface } from "node:readline";
+import { createAudit } from "./audit.ts";
 import { loadConfig } from "./config.ts";
 import { streamChat, type Message } from "./llm.ts";
 
@@ -9,6 +10,7 @@ const HELP = "输入后回车对话;/clear 清空上下文,/exit 退出。";
 async function main(): Promise<void> {
   const config = loadConfig();
   const messages: Message[] = [{ role: "system", content: config.systemPrompt }];
+  const audit = createAudit();
 
   console.log(`模型   ${config.model}`);
   console.log(`接口   ${config.baseUrl}`);
@@ -41,15 +43,18 @@ async function main(): Promise<void> {
       stdout.write("AI > ");
 
       try {
-        const reply = await streamChat(config, messages, (delta) => stdout.write(delta));
+        const { reply, usage } = await streamChat(config, messages, (delta) => stdout.write(delta));
         messages.push({ role: "assistant", content: reply });
+
+        stdout.write("\n");
+        console.log(usage ? audit.add(usage) : "─ tokens  (服务端未返回 usage,本轮无法结算)");
       } catch (error) {
         // 这一轮没成功,别把半截对话留在上下文里
         messages.pop();
         console.error(`\n[错误] ${error instanceof Error ? error.message : String(error)}`);
       }
 
-      stdout.write(`\n\n${PROMPT}`);
+      stdout.write(`\n${PROMPT}`);
     }
   } finally {
     rl.close();
