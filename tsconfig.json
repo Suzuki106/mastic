@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+
+    // Node 直接跑 .ts(类型擦除),所以不允许任何需要编译期改写的语法:
+    // 没有 enum / namespace / 参数属性,import 必须带 .ts 后缀。
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+}

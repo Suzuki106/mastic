@@ -3,3 +3,12 @@
 
 # Local Claude Code config (hooks, settings) — personal, never committed
 .claude/
+
+# Node
+node_modules/
+dist/
+
+# Secrets — the API key lives in .env, never commit it (.env.example is the template)
+.env
+.env.*
+!.env.example
