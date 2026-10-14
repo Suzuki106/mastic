@@ -10,6 +10,7 @@ const SUMMARY_PROMPT = `你是对话压缩器。把给你的对话记录压缩�
 - 约束条件、限制、偏好
 - 未解决的问题和待办事项
 - 关键标识符:文件名、函数名、报错原文、数字、URL
+- 调用了哪些工具、**拿到的结果本身**(数据、报错原文),而不是"查了一下"这种转述
 
 可以丢弃:
 - 寒暄与客套
@@ -40,6 +41,46 @@ export interface Split {
  * totalTokens 是这一轮真实的 prompt_tokens,拿它把「token 预算」换算成「字符占比」——
  * 于是不必引 tokenizer,只用两个精确量:API 给的 token 数 + 本地算的字符数。
  */
+/**
+ * 切成不可分割的「组」。
+ *
+ * 普通消息各成一组;但 assistant(tool_calls) **连同它引发的那几条 tool 消息**
+ * 必须算作一组 —— 切在它们中间会留下一条没有 tool_calls 对应的孤立 tool 消息,
+ * 下一次请求会被 API 直接拒绝。
+ */
+function groupUnits(messages: Message[]): Message[][] {
+  const units: Message[][] = [];
+
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (!message) continue;
+
+    if (message.role === "assistant" && message.tool_calls?.length) {
+      const group: Message[] = [message];
+
+      let j = i + 1;
+      while (j < messages.length && messages[j]?.role === "tool") {
+        group.push(messages[j] as Message);
+        j += 1;
+      }
+
+      units.push(group);
+      i = j - 1;
+      continue;
+    }
+
+    units.push([message]);
+  }
+
+  return units;
+}
+
+/**
+ * 从最新往回找保留区,切点对齐到「组」边界。
+ *
+ * totalTokens 是这一轮真实的 prompt_tokens,拿它把「token 预算」换算成「字符占比」——
+ * 于是不必引 tokenizer,只用两个精确量:API 给的 token 数 + 本地算的字符数。
+ */
 export function splitForCompaction(
   messages: Message[],
   keepRecentTokens: number,
@@ -49,8 +90,9 @@ export function splitForCompaction(
   const body = messages.slice(1);
   if (body.length === 0) return { keep: [], fold: [] };
 
-  const chars = body.map(contentLength);
-  const totalChars = chars.reduce((sum, n) => sum + n, 0);
+  const units = groupUnits(body);
+  const sizes = units.map((unit) => unit.reduce((sum, m) => sum + contentLength(m), 0));
+  const totalChars = sizes.reduce((sum, n) => sum + n, 0);
 
   if (totalChars === 0 || totalTokens <= 0 || keepRecentTokens >= totalTokens) {
     return { keep: body, fold: [] };
@@ -60,18 +102,18 @@ export function splitForCompaction(
 
   let cut = 0;
   let accumulated = 0;
-  for (let i = body.length - 1; i >= 0; i--) {
-    accumulated += chars[i] ?? 0;
+  for (let i = units.length - 1; i >= 0; i--) {
+    accumulated += sizes[i] ?? 0;
     cut = i;
-    // 向上取整:跨过预算的那一条也算进保留区,所以是 >= 而不是 >
+    // 向上取整:跨过预算的那一整组也算进保留区,所以是 >= 而不是 >
     if (accumulated >= budgetChars) break;
   }
 
   // 保留区不要以 assistant 开头,否则开头是一段没有来由的模型独白。
-  // 往前多吃一条 —— 对话是交替的,再往前那条就是 user。
-  if (cut > 0 && body[cut]?.role === "assistant") cut -= 1;
+  // 往前多吃一整组 —— 对话是交替的,再往前那组就是 user。
+  if (cut > 0 && units[cut]?.[0]?.role === "assistant") cut -= 1;
 
-  return { keep: body.slice(cut), fold: body.slice(0, cut) };
+  return { keep: units.slice(cut).flat(), fold: units.slice(0, cut).flat() };
 }
 
 function transcript(messages: Message[]): string {
