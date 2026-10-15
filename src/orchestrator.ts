@@ -58,7 +58,11 @@ function addUsage(total: RunUsage, next: Usage | null): RunUsage {
 }
 
 /** 并发闸门:同时最多 limit 个在跑,跑完一个补一个。 */
-async function runPool<T>(items: T[], limit: number, run: (item: T) => Promise<void>): Promise<void> {
+export async function runPool<T>(
+  items: T[],
+  limit: number,
+  run: (item: T) => Promise<void>,
+): Promise<void> {
   const queue = [...items];
 
   const runners = Array.from({ length: Math.min(limit, queue.length) }, async () => {
