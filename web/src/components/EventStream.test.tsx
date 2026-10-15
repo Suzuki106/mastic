@@ -70,22 +70,22 @@ describe("事件流", () => {
   });
 
   /**
-   * 后端每 8 秒报一次"想到哪了",追加进日志是对的(那是记录)。
-   * 但界面上排成几十行没意义 —— 它们是同一个动作的连续快照。
+   * 后端推的是**增量**,不是切片。这里必须把它们接起来 ——
+   * 之前每条各显示一段、后者取代前者,用户每 8 秒看到一块碎片,永远拼不成句子。
    */
-  it("连续的 thinking 压成一行,显示最新的那条", () => {
+  it("连续的 thinking 拼成一块完整思路,而不是只留最后一段", () => {
     const html = render([
       event(1, "run_start", "开始"),
-      event(2, "thinking", "想到第一步", "planner"),
-      event(3, "thinking", "想到第二步", "planner"),
-      event(4, "thinking", "想到第三步", "planner"),
+      event(2, "thinking", "先看仓库结构。", "planner"),
+      event(3, "thinking", "它是空的,所以要全新搭建。", "planner"),
+      event(4, "thinking", "那就先冻结边界和指标。", "planner"),
     ]);
-    expect(html).toContain("想到第三步");
-    expect(html).not.toContain("想到第一步");
-    expect(html).not.toContain("想到第二步");
+    expect(html).toContain("先看仓库结构。");
+    expect(html).toContain("它是空的,所以要全新搭建。");
+    expect(html).toContain("那就先冻结边界和指标。");
   });
 
-  it("中间隔了别的事件就不合并 —— 那是两次不同的思考", () => {
+  it("中间隔了别的事件就分开 —— 那是两次不同的思考", () => {
     const html = render([
       event(1, "thinking", "第一次思考", "planner"),
       event(2, "task_step", "list_dir → 看了一圈", "planner"),
@@ -95,13 +95,19 @@ describe("事件流", () => {
     expect(html).toContain("第二次思考");
   });
 
-  it("不同任务的 thinking 也不合并", () => {
+  it("不同任务的 thinking 也分开", () => {
     const html = render([
       event(1, "thinking", "T-001 在想", "T-001"),
       event(2, "thinking", "T-002 在想", "T-002"),
     ]);
     expect(html).toContain("T-001 在想");
     expect(html).toContain("T-002 在想");
+  });
+
+  it("思考那一行是可点的,并且给出展开提示", () => {
+    const html = render([event(1, "run_start", "开始"), event(2, "thinking", "在想事情", "planner")]);
+    expect(html).toContain("<button");
+    expect(html).toContain("展开");
   });
 
   it("thinking 不再是最后一条时,退回成普通行,秒表停", () => {

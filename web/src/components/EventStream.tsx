@@ -62,24 +62,49 @@ function Row({ event, expanded, onToggle }: { event: RunEvent; expanded: boolean
   );
 }
 
-/** 还在进行中的那次模型调用。秒表由界面自己走,不是靠往日志里灌记录。 */
-function ThinkingRow({ event, elapsed }: { event: RunEvent; elapsed: number }) {
-  const label = event.detail.startsWith("想完了") ? "想完了" : "正在思考";
-
+/**
+ * 正在进行的这次模型调用。
+ *
+ * 显示的是一整块**连续生长**的推理,不是一段段切片 —— 后端推的是增量,
+ * 这里把它们接起来。默认压到几行,点开看全文。
+ */
+function ThinkingRow({
+  elapsed,
+  text,
+  expanded,
+  onToggle,
+}: {
+  elapsed: number;
+  text: string;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   return (
     <li className="border-b border-line/60 bg-running/4 last:border-b-0">
-      <div className="grid grid-cols-[52px_54px_1fr] items-baseline gap-2 px-3 py-[3px]">
-        <span className="font-mono text-[10.5px] text-faint">{clockOf(event.at)}</span>
-        <span className="truncate font-mono text-[10.5px] text-running">{event.task ?? "run"}</span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-[12px] leading-[1.5]">
-          <RunningIcon size={12} className="animate-spin shrink-0 self-center text-running" />
-          <span className="shrink-0 font-medium text-running">{label}</span>
-          <span className="shrink-0 font-mono text-[11px] tabular-nums text-running/70">{elapsed}s</span>
-          {/* 推理的末尾一段才是这条的价值 —— 它让"在想什么"看得见,
-              而不只是"它还在" */}
-          <span className="truncate text-slate-600">{event.detail}</span>
+      <button onClick={onToggle} className="w-full px-3 py-1.5 text-left transition-colors hover:bg-running/8">
+        <span className="grid grid-cols-[52px_54px_1fr] items-baseline gap-2">
+          <span className="font-mono text-[10.5px] text-faint" />
+          <span className="truncate font-mono text-[10.5px] text-running">planner</span>
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <RunningIcon size={12} className="animate-spin shrink-0 self-center text-running" />
+            <span className="shrink-0 font-medium text-running">正在思考</span>
+            <span className="shrink-0 font-mono text-[11px] tabular-nums text-running/70">{elapsed}s</span>
+            {text !== "" && (
+              <span className="ml-auto shrink-0 text-[10.5px] text-faint">{expanded ? "收起" : "展开"}</span>
+            )}
+          </span>
         </span>
-      </div>
+
+        {text !== "" && (
+          <pre
+            className={`mt-1 ml-[114px] font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap text-slate-600 ${
+              expanded ? "" : "line-clamp-4"
+            }`}
+          >
+            {text}
+          </pre>
+        )}
+      </button>
     </li>
   );
 }
@@ -93,6 +118,7 @@ export function EventStream({ events, live }: EventStreamProps) {
   // 默认全显示 —— 过程事件才是"正在发生什么",而那是这个面板存在的理由
   const [onlyImportant, setOnlyImportant] = useState(false);
   const [expanded, setExpanded] = useState<ReadonlySet<number>>(new Set());
+  const [thinkingExpanded, setThinkingExpanded] = useState(false);
   const [atBottom, setAtBottom] = useState(true);
   const [now, setNow] = useState(() => Date.now());
 
@@ -100,32 +126,35 @@ export function EventStream({ events, live }: EventStreamProps) {
   const stickToBottom = useRef(true);
 
   /**
-   * 把连续的 thinking 压成一条 —— 后来者取代前者。
+   * 把连续的 thinking 接成一条。
    *
-   * 后端每 8 秒报一次"想到哪了",追加到日志里是对的(那是记录);
-   * 但界面上把它们排成几十行没有意义,它们是**同一个动作的连续快照**。
-   * 压成一行,它就变成"一行不停更新的思路"。
+   * 后端每 8 秒推一次**增量**,这里把增量拼起来 —— 于是一整块连续的思路,
+   * 而不是每 8 秒换一次的碎片(那是切片的做法,看到的永远拼不成句子)。
    */
-  const collapsed = useMemo(() => {
-    const out: RunEvent[] = [];
+  const shown = useMemo(() => {
+    const out: { event: RunEvent; text: string }[] = [];
     for (const event of onlyImportant ? events.filter((e) => IMPORTANT.has(e.kind)) : events) {
       const previous = out[out.length - 1];
-      if (event.kind === "thinking" && previous?.kind === "thinking" && previous.task === event.task) {
-        out[out.length - 1] = event;
+      if (
+        event.kind === "thinking" &&
+        previous?.event.kind === "thinking" &&
+        previous.event.task === event.task
+      ) {
+        previous.text += event.detail;
+        previous.event = event; // 时间戳和 seq 用最新的那条
         continue;
       }
-      out.push(event);
+      out.push({ event, text: event.kind === "thinking" ? event.detail : event.detail });
     }
     return out;
   }, [events, onlyImportant]);
 
-  const shown = collapsed;
   const hidden = events.length - shown.length;
 
   const latest = events[events.length - 1];
-  // "最后一条是 thinking" = 这一轮还没回来,秒表继续走
-  const thinking = latest?.kind === "thinking" ? latest : undefined;
-  const thinkingSeq = thinking?.seq;
+  // 最后一条是 thinking = 这一轮还没回来,秒表继续走
+  const thinkingSeq = latest?.kind === "thinking" ? latest.seq : undefined;
+  const thinkingText = shown[shown.length - 1]?.event.kind === "thinking" ? shown[shown.length - 1]?.text : "";
 
   useEffect(() => {
     if (thinkingSeq === undefined) return;
@@ -150,7 +179,7 @@ export function EventStream({ events, live }: EventStreamProps) {
     const node = listRef.current;
     if (node === null || !stickToBottom.current) return;
     node.scrollTo({ top: node.scrollHeight, behavior: "smooth" });
-  }, [shown.length, thinkingSeq]);
+  }, [shown.length, thinkingText]);
 
   const toggle = (seq: number): void => {
     setExpanded((current) => {
@@ -161,7 +190,9 @@ export function EventStream({ events, live }: EventStreamProps) {
     });
   };
 
-  const elapsed = thinking === undefined ? 0 : Math.max(0, Math.floor((now - new Date(thinking.at).getTime()) / 1000));
+  const previousSeq = shown[shown.length - 2]?.event.seq;
+  const elapsed =
+    latest?.kind === "thinking" ? Math.max(0, Math.floor((now - new Date(latest.at).getTime()) / 1000)) : 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -188,9 +219,15 @@ export function EventStream({ events, live }: EventStreamProps) {
         </div>
       ) : (
         <ol ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
-          {shown.map((event) =>
+          {shown.map(({ event, text }) =>
             event.seq === thinkingSeq ? (
-              <ThinkingRow key={event.seq} event={event} elapsed={elapsed} />
+              <ThinkingRow
+                key={`thinking-${previousSeq ?? 0}`}
+                elapsed={elapsed}
+                text={thinkingText ?? ""}
+                expanded={thinkingExpanded}
+                onToggle={() => setThinkingExpanded((current) => !current)}
+              />
             ) : (
               <Row
                 key={event.seq}
@@ -203,8 +240,7 @@ export function EventStream({ events, live }: EventStreamProps) {
         </ol>
       )}
 
-      {/* 只有你翻上去看历史时才出现 —— 一直在底部的话它就只是重复最后一行,
-          还容易被当成"第一张卡片一直在刷" */}
+      {/* 只有你翻上去看历史时才出现 —— 一直在底部的话它就只是重复最后一行 */}
       {!atBottom && latest !== undefined && (
         <button
           onClick={() => {
@@ -217,7 +253,7 @@ export function EventStream({ events, live }: EventStreamProps) {
           <span className="truncate font-mono text-[11px] text-slate-600">
             <span className="text-running">{latest.task ?? "run"}</span>
             <span className="text-faint"> · </span>
-            {latest.detail}
+            {latest.detail.slice(0, 60) || "…"}
           </span>
         </button>
       )}
