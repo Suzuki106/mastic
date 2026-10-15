@@ -6,7 +6,7 @@ import type { Config } from "./config.ts";
 import { topoLayers } from "./doc/plan.ts";
 import type { ReportDoc, ReportStatus } from "./doc/report.ts";
 import type { TaskDoc } from "./doc/task.ts";
-import { createEventBus, type RunEvent } from "./events.ts";
+import { createEventBus, eventKindOf, type RunEvent } from "./events.ts";
 import type { Usage } from "./llm.ts";
 import { discoveryTools } from "./tools/index.ts";
 import {
@@ -126,7 +126,8 @@ async function runTask(
       timeoutMs: options.config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
       ...(findings === undefined ? {} : { findings }),
-      onEvent: (event) => emit({ kind: "task_step", task: task.id, detail: event.detail }),
+      onEvent: (event) =>
+        emit({ kind: eventKindOf(event.kind), task: task.id, detail: event.detail }),
     });
 
     usage = addUsage(usage, worked.usage);
@@ -231,7 +232,10 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,
     maxSteps: options.planSteps ?? 30,
-    onEvent: (event) => bus.emit({ kind: "task_step", task: "planner", detail: event.detail }),
+    // kind 要原样带过去 —— 尤其 thinking:"还在请求模型"和"读完一个文件"
+    // 在前端是两种东西,压成一种就画不出进行中的状态了
+    onEvent: (event) =>
+      bus.emit({ kind: eventKindOf(event.kind), task: "planner", detail: event.detail }),
   });
 
   const plannerUsage = addUsage(emptyUsage, planned.usage);

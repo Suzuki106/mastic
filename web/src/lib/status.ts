@@ -75,6 +75,9 @@ export function eventTone(kind: string): string {
   if (kind === "run_start" || kind === "run_done") return "text-verified";
   if (kind === "task_retry") return "text-unverified";
   if (kind === "task_skipped") return "text-faint";
+  // 模型自己说的话比工具调用有信息量 —— 它在交代思路,别和读文件一个分量
+  if (kind === "assistant") return "text-slate-700";
+  if (kind === "thinking") return "text-running";
   return "text-muted";
 }
 

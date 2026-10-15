@@ -4,6 +4,8 @@ import type { RunPaths } from "./workspace.ts";
 
 export type EventKind =
   | "run_start"
+  | "thinking"
+  | "assistant"
   | "plan_done"
   | "task_start"
   | "task_step"
@@ -11,6 +13,19 @@ export type EventKind =
   | "task_verdict"
   | "task_skipped"
   | "run_done";
+
+/**
+ * 把工具循环里的事件类型映射到事件流的类型。
+ *
+ * 以前这里是一律写死 `task_step` 的,于是"正在请求模型"和一次普通的文件读取
+ * 长得一模一样 —— 前端没法知道哪条是"还在进行中的模型调用",也就没法给它画
+ * 个走动的秒表。用户看到的是一行不动的字,和卡住没有区别。
+ */
+export function eventKindOf(loopKind: string): EventKind {
+  if (loopKind === "thinking") return "thinking";
+  if (loopKind === "assistant") return "assistant";
+  return "task_step";
+}
 
 export interface RunEvent {
   /** 单调递增 —— 前端断线重连时靠它续上。 */
