@@ -59,11 +59,33 @@ export async function runCommand(command: string, options: RunOptions): Promise<
       // 环境变量原样传下去,但关掉交互式分页,免得命令卡在等输入上
       env: { ...process.env, GIT_PAGER: "cat", PAGER: "cat", CI: "1" },
       stdio: ["ignore", "pipe", "pipe"],
+      // 自成进程组。这样 `cmd &` 起的后台进程也在这一组里,
+      // 收尾时能一起收掉 —— 否则杀掉 shell,后台的还活着。
+      detached: true,
     });
+
+    /**
+     * 杀掉**整组**,不是那一个 shell。
+     *
+     * 这条命令背后的坑是真的踩过:worker 用 `python3 -m server.app &` 起了个
+     * 测试服务,那个进程继承了 stdout/stderr 两个管道。Node 的 'close' 事件
+     * 要所有持有管道的人退出才触发,于是**永远不触发**,runCommand 的 Promise
+     * 永不 settle —— 没有超时、没有报错、进程 idle、一次运行就这么静悄悄地
+     * 挂死七个多小时,还留下四个孤儿服务占着端口。
+     */
+    const killGroup = (): void => {
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // 进程组可能已经没了
+        child.kill("SIGKILL");
+      }
+    };
 
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGKILL");
+      killGroup();
     }, options.timeoutMs);
 
     child.stdout.on("data", (chunk: Buffer) => {
@@ -80,6 +102,10 @@ export async function runCommand(command: string, options: RunOptions): Promise<
       clearTimeout(timer);
       reject(error);
     });
+
+    // shell 一退出就收掉整组:它可能留了后台进程攥着管道,
+    // 不收的话 'close' 永远不来。
+    child.on("exit", () => killGroup());
 
     child.on("close", (code) => {
       clearTimeout(timer);
