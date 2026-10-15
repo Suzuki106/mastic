@@ -69,6 +69,41 @@ describe("事件流", () => {
     expect(html).toContain("s</span>");
   });
 
+  /**
+   * 后端每 8 秒报一次"想到哪了",追加进日志是对的(那是记录)。
+   * 但界面上排成几十行没意义 —— 它们是同一个动作的连续快照。
+   */
+  it("连续的 thinking 压成一行,显示最新的那条", () => {
+    const html = render([
+      event(1, "run_start", "开始"),
+      event(2, "thinking", "想到第一步", "planner"),
+      event(3, "thinking", "想到第二步", "planner"),
+      event(4, "thinking", "想到第三步", "planner"),
+    ]);
+    expect(html).toContain("想到第三步");
+    expect(html).not.toContain("想到第一步");
+    expect(html).not.toContain("想到第二步");
+  });
+
+  it("中间隔了别的事件就不合并 —— 那是两次不同的思考", () => {
+    const html = render([
+      event(1, "thinking", "第一次思考", "planner"),
+      event(2, "task_step", "list_dir → 看了一圈", "planner"),
+      event(3, "thinking", "第二次思考", "planner"),
+    ]);
+    expect(html).toContain("第一次思考");
+    expect(html).toContain("第二次思考");
+  });
+
+  it("不同任务的 thinking 也不合并", () => {
+    const html = render([
+      event(1, "thinking", "T-001 在想", "T-001"),
+      event(2, "thinking", "T-002 在想", "T-002"),
+    ]);
+    expect(html).toContain("T-001 在想");
+    expect(html).toContain("T-002 在想");
+  });
+
   it("thinking 不再是最后一条时,退回成普通行,秒表停", () => {
     const html = render([event(1, "thinking", "正在请求模型…", "planner"), event(2, "run_done", "完成")]);
     expect(html).not.toContain("正在思考");

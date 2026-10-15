@@ -71,11 +71,13 @@ function ThinkingRow({ event, elapsed }: { event: RunEvent; elapsed: number }) {
       <div className="grid grid-cols-[52px_54px_1fr] items-baseline gap-2 px-3 py-[3px]">
         <span className="font-mono text-[10.5px] text-faint">{clockOf(event.at)}</span>
         <span className="truncate font-mono text-[10.5px] text-running">{event.task ?? "run"}</span>
-        <span className="flex min-w-0 items-baseline gap-1.5 text-[12px] leading-[1.5] text-running">
-          <RunningIcon size={12} className="animate-spin shrink-0 self-center" />
-          <span className="shrink-0 font-medium">{label}</span>
-          <span className="font-mono text-[11px] tabular-nums text-running/70">{elapsed}s</span>
-          <span className="truncate text-faint">{event.detail}</span>
+        <span className="flex min-w-0 items-baseline gap-1.5 text-[12px] leading-[1.5]">
+          <RunningIcon size={12} className="animate-spin shrink-0 self-center text-running" />
+          <span className="shrink-0 font-medium text-running">{label}</span>
+          <span className="shrink-0 font-mono text-[11px] tabular-nums text-running/70">{elapsed}s</span>
+          {/* 推理的末尾一段才是这条的价值 —— 它让"在想什么"看得见,
+              而不只是"它还在" */}
+          <span className="truncate text-slate-600">{event.detail}</span>
         </span>
       </div>
     </li>
@@ -97,10 +99,27 @@ export function EventStream({ events, live }: EventStreamProps) {
   const listRef = useRef<HTMLOListElement>(null);
   const stickToBottom = useRef(true);
 
-  const shown = useMemo(
-    () => (onlyImportant ? events.filter((event) => IMPORTANT.has(event.kind)) : events),
-    [events, onlyImportant],
-  );
+  /**
+   * 把连续的 thinking 压成一条 —— 后来者取代前者。
+   *
+   * 后端每 8 秒报一次"想到哪了",追加到日志里是对的(那是记录);
+   * 但界面上把它们排成几十行没有意义,它们是**同一个动作的连续快照**。
+   * 压成一行,它就变成"一行不停更新的思路"。
+   */
+  const collapsed = useMemo(() => {
+    const out: RunEvent[] = [];
+    for (const event of onlyImportant ? events.filter((e) => IMPORTANT.has(e.kind)) : events) {
+      const previous = out[out.length - 1];
+      if (event.kind === "thinking" && previous?.kind === "thinking" && previous.task === event.task) {
+        out[out.length - 1] = event;
+        continue;
+      }
+      out.push(event);
+    }
+    return out;
+  }, [events, onlyImportant]);
+
+  const shown = collapsed;
   const hidden = events.length - shown.length;
 
   const latest = events[events.length - 1];
