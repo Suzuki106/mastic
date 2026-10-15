@@ -202,15 +202,54 @@ async function runTask(
   };
 }
 
+/**
+ * 起一次运行。
+ *
+ * 外面这层只管一件事:**崩了也要留下痕迹**。
+ *
+ * 原先不是这样:任务执行里任何一处抛异常,都会直接冲出去,于是
+ * `writeRunDoc` 永远走不到,`run.md` 就停在 `status: running` ——
+ * 界面看不出它已经死了,磁盘上也没有任何记录说明为什么。
+ * 一次真实运行就这么无声无息地挂了七个多小时,留下的只有一份说
+ * "还在跑"的 run.md。
+ */
 export async function orchestrate(options: OrchestrateOptions): Promise<OrchestrateResult> {
   const runId = options.runId ?? newRunId();
   const paths = await createRun(options.workspace, runId);
   const bus = createEventBus(paths, runId);
   if (options.onEvent !== undefined) bus.subscribe(options.onEvent);
 
+  const startedAt = new Date().toISOString();
+  const empty: RunUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+
+  try {
+    return await runOrchestration(options, paths, bus, startedAt);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+
+    bus.emit({ kind: "run_done", detail: `出错终止:${reason}` });
+
+    await writeRunDoc(paths, {
+      id: runId,
+      goal: options.goal,
+      workspace: options.workspace,
+      created_at: startedAt,
+      finished_at: new Date().toISOString(),
+      status: "failed",
+    });
+
+    return { runId, paths, outcomes: [], usage: empty, failure: `运行中断:${reason}` };
+  }
+}
+
+async function runOrchestration(
+  options: OrchestrateOptions,
+  paths: RunPaths,
+  bus: ReturnType<typeof createEventBus>,
+  createdAt: string,
+): Promise<OrchestrateResult> {
+  const runId = paths.root.split("/").pop() ?? "";
   const emptyUsage: RunUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-  // 记一次,收尾时接着用 —— 否则最终那份 run.md 的 created_at 会变成结束时刻
-  const createdAt = new Date().toISOString();
 
   await writeRunDoc(paths, {
     id: runId,

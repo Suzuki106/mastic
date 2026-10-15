@@ -26,6 +26,9 @@ export const STATUS = {
   running: { label: "在跑", color: "running", Icon: RunningIcon },
   done: { label: "已完成", color: "verified", Icon: VerifiedIcon },
   pending: { label: "待跑", color: "pending", Icon: PendingIcon },
+  // run.md 写着在跑、但没有任何进程在跑它 —— 崩了或者服务重启过。
+  // 不显示成"在跑",那是在骗人。
+  interrupted: { label: "已中断", color: "contradicted", Icon: ContradictedIcon },
 } as const;
 
 export type StatusKey = keyof typeof STATUS;
@@ -45,6 +48,7 @@ export const BADGE_STYLE: Record<string, string> = {
   skipped: "text-faint border-line-strong bg-slate-50",
   running: "text-running border-running/35 bg-running/8",
   pending: "text-faint border-line-strong bg-slate-50",
+  interrupted: "text-contradicted border-contradicted/35 bg-contradicted/8",
 };
 
 /** 任务树节点左侧那条竖线的颜色。 */
@@ -57,6 +61,7 @@ export const EDGE_COLOR: Record<string, string> = {
   skipped: "border-l-line-strong",
   running: "border-l-running",
   pending: "border-l-line-strong",
+  interrupted: "border-l-contradicted",
 };
 
 export function badgeClass(status: string | undefined): string {

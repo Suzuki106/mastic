@@ -7,6 +7,8 @@ export interface RunSummary {
   goal: string;
   status: string;
   running: boolean;
+  /** 死在半路时的原因。只有本进程起的运行才有。 */
+  error?: string;
 }
 
 export interface DocEntry<T> {

@@ -190,6 +190,7 @@ export default function App() {
 
   const current = runs.find((run) => run.id === runId);
   const isRunning = busy || current?.running === true;
+  const stalled = current !== undefined && current.status === "running" && !isRunning;
 
   const tabClass = (on: boolean): string =>
     `inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] transition-colors ${
@@ -212,7 +213,16 @@ export default function App() {
               <p className="truncate text-[12.5px] text-muted" title={current.goal}>
                 {current.goal}
               </p>
-              <StatusBadge status={current.status} {...(isRunning ? { running: true } : {})} />
+              {/* run.md 说在跑、实际没进程在跑它 = 崩了或服务重启过。显示成"在跑"是骗人。 */}
+              <StatusBadge
+                status={stalled ? "interrupted" : current.status}
+                {...(isRunning ? { running: true } : {})}
+              />
+              {current.error !== undefined && !isRunning && (
+                <span className="truncate text-[11.5px] text-contradicted" title={current.error}>
+                  {current.error}
+                </span>
+              )}
             </>
           )}
         </div>

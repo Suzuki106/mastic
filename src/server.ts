@@ -354,11 +354,15 @@ async function route(
       const docs = await Promise.all(
         ids.map(async (id) => {
           const doc: RunDoc | undefined = await readRunDoc(runPaths(workspace, id));
+          const entry = runs.list().find((item) => item.runId === id);
           return {
             id,
             goal: doc?.goal ?? "",
             status: doc?.status ?? "unknown",
             running: runs.isRunning(id),
+            // 出错死在半路的,把原因带出去 —— 否则界面上只看到它"不在跑",
+            // 不知道为什么,也不知道该不该重跑
+            ...(entry?.error === undefined ? {} : { error: entry.error }),
           };
         }),
       );
