@@ -16,6 +16,7 @@ import {
   Circle,
   CircleSlash,
   FileText,
+  FolderOpen,
   Hourglass,
   ListChecks,
   Loader,
@@ -47,3 +48,4 @@ export const BlockedDetailIcon = Hourglass;
 export const RejectedDetailIcon = Minus;
 export const ArrowIcon = ChevronRight;
 export const EmptyIcon = Square;
+export const WorkspaceIcon = FolderOpen;

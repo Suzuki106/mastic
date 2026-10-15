@@ -106,7 +106,7 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function fetchRuns(): Promise<{ runs: RunSummary[] }> {
+export function fetchRuns(): Promise<{ runs: RunSummary[]; workspace: string }> {
   return getJson("/api/runs");
 }
 

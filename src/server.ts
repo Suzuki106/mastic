@@ -264,7 +264,9 @@ async function route(
           };
         }),
       );
-      return json({ runs: docs.reverse() });
+      // 工作区一并带回去:界面上得能看见"活儿到底在哪个目录里干",
+      // 否则用户没法知道新文件会落在哪。
+      return json({ runs: docs.reverse(), workspace: options.workspace });
     }
 
     const match = /^\/api\/runs\/([^/]+)(\/events|\/cancel)?$/.exec(path);
