@@ -119,7 +119,7 @@ acceptance:
 constraints:
   - 不得修改 test/slugify.test.js 与 package.json
   - 不引入任何第三方依赖
-budget: { max_steps: 24 }
+budget: { max_steps: 30 }
 ---
 ## 背景
 ## 交付要求
@@ -172,7 +172,7 @@ verdict:
 | `MASTIC_WORKSPACE` | 当前目录 | agent 动手的目录 |
 | `MASTIC_CONCURRENCY` | `3` | 同时跑几个 worker |
 | `MASTIC_MAX_RETRIES` | `2` | 判 contradicted 后最多重派几次 |
-| `MASTIC_MAX_STEPS` | `24` | worker 单个任务最多几步 |
+| `MASTIC_MAX_STEPS` | `30` | worker 单个任务最多几步 |
 | `MASTIC_COMMAND_TIMEOUT_MS` | `300000` | 验收命令超时 |
 | `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `120000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
 
@@ -236,6 +236,12 @@ npm run typecheck # tsc --noEmit
 
 **为什么 `unverified` 是合法终态。** agent 会说谎,是因为 schema 逼着它把结论填满。
 给它一个体面的"我不知道",它才不需要编。
+
+**为什么步数用尽后还要再给一轮。** 一开始不是这样的:步数用尽就直接判失败,
+重试从头再来一遍 —— 于是同一个任务每次都卡在同样的步数上,永远做不完,
+而已经做的工作全丢了。现在用尽步数会强制交卷:做成什么写什么,没做完的
+写进 `unresolved`。**交一份不完整的报告是可以接受的;什么都不交不可以。**
+(这是实测出来的:自举任务在真实仓库里光读文件就花掉了二十多步。)
 
 **为什么禁词表里没有 TODO / FIXME。** 那不是"在编",是"没写完"。
 而且 `node --test` 的输出里天然有一行 `ℹ todo 0`,放进禁词表必然误伤每一份老实报告。

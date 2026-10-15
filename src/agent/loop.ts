@@ -1,6 +1,14 @@
 import type { Config } from "../config.ts";
-import { streamChat, type Message, type ToolSchema, type Usage } from "../llm.ts";
+import { streamChat, type ChatResult, type Message, type StreamOptions, type ToolSchema, type Usage } from "../llm.ts";
 import { findTool, toolSchemas, type Tool, type ToolContext } from "../tools/index.ts";
+
+/**
+ * 发一次请求拿一次回复。
+ *
+ * 单独抽成一个可替换的入口,是为了让这个循环能被离线测到 ——
+ * 步数用尽、打回重交、卡住判定这些行为全在这里,而它们恰恰是最该被测的。
+ */
+export type ChatFn = (config: Config, messages: Message[], options?: StreamOptions) => Promise<ChatResult>;
 
 export type LoopEventKind = "assistant" | "tool" | "rejected" | "stopped";
 
@@ -28,6 +36,8 @@ export interface ToolLoopOptions {
   onTerminal: (args: Record<string, unknown>) => string | undefined;
   maxSteps: number;
   onEvent?: (event: LoopEvent) => void;
+  /** 测试用。默认就是真的 streamChat。 */
+  chat?: ChatFn;
 }
 
 export interface ToolLoopResult {
@@ -81,14 +91,37 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
   let steps = 0;
   let usage: Usage | null = null;
   let previousSignature = "";
+  let finalRound = false;
 
   for (;;) {
     if (steps >= options.maxSteps) {
-      options.onEvent?.({ kind: "stopped", detail: `已用满 ${options.maxSteps} 步,收工` });
-      return { terminalArgs: null, status: "steps", usage };
+      if (finalRound) {
+        options.onEvent?.({ kind: "stopped", detail: `用满 ${options.maxSteps} 步也没交卷` });
+        return { terminalArgs: null, status: "steps", usage };
+      }
+
+      // 步数用尽不该什么都不留下。再给一轮,专门用来交卷 ——
+      // 否则一次"没跑完"会把已经做的工作全丢掉,而重试是从头再来一遍,
+      // 同一个任务永远卡在同样的步数上。
+      //
+      // 注意这里**不能 continue** —— 回到循环顶会再撞上这个判断,
+      // 那一轮就永远轮不到发请求。直接落到下面的 chat 调用。
+      finalRound = true;
+      options.onEvent?.({ kind: "stopped", detail: `已用满 ${options.maxSteps} 步,要它交卷` });
+      messages.push({
+        role: "user",
+        content:
+          `步数已经用尽,不要再做任何调查或修改。\n\n` +
+          `现在立刻调用 \`${options.terminalTool}\` 交卷:\n` +
+          `- 已经做成的,写进 claims,带上证据引用;\n` +
+          `- 没做完的,原样写进 unresolved;\n` +
+          `- 如果整件事做不下去,写 blocked 并说明卡在哪。\n\n` +
+          `交一份不完整的报告是可以接受的;什么都不交不可以。`,
+      });
     }
 
-    const { reply, toolCalls, usage: turnUsage } = await streamChat(options.config, messages, {
+    const chat = options.chat ?? streamChat;
+    const { reply, toolCalls, usage: turnUsage } = await chat(options.config, messages, {
       tools: schemas,
     });
     usage = addUsage(usage, turnUsage);

@@ -41,6 +41,9 @@ const SYSTEM = `你是 mastic 的 planner。
 **先摸现场再动手。** 用 list_dir / read_file 看清仓库结构。不要凭印象拆 ——
 你没读过的文件不该出现在 inputs 里。
 
+**别浪费步数**:跳过 \`node_modules/\` 和 \`.mastic/\`(那是 mastic 自己的运行产物)。
+读源码读测试读配置就够,不要逐个文件翻依赖。
+
 ## 拆任务的原则
 
 1. 每个任务都要能被独立验证。拆不出验收标准的任务,说明还没拆够细。
@@ -89,7 +92,9 @@ budget: { max_steps: 24 }
   写出来只是声明)、no_unresolved(要求不许留未解决项)、deliverable_matches_task。
 - \`allow_terms\`:只有任务本身就在讲那些词时才写(比如「写一个 mock server」)。
   这是给误报留的唯一出口,别拿它当挡箭牌。
-- \`budget.max_steps\` 简单的给 24,复杂的给 40。
+- \`budget.max_steps\` 是 worker 的工具往返上限,**宁可给宽一点**:
+  在真实仓库里光是把相关文件读明白就可能花掉十几步,给窄了任务会在
+  做到一半时被截断。改动一个文件给 30,涉及多文件或要反复跑测试给 60。
 
 ## 交卷
 

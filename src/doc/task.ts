@@ -260,7 +260,7 @@ export function parseTaskDoc(raw: string): TaskParseResult {
   }
 
   const budgetRaw = readRecord(data, "budget", errors);
-  const maxSteps = budgetRaw === undefined ? 24 : readInt(budgetRaw, "max_steps", errors, 24);
+  const maxSteps = budgetRaw === undefined ? 30 : readInt(budgetRaw, "max_steps", errors, 30);
 
   const task: TaskDoc = {
     id: id ?? "",

@@ -58,7 +58,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     workspace: optional("MASTIC_WORKSPACE") ?? process.cwd(),
     concurrency: positiveInt("MASTIC_CONCURRENCY", 3),
     maxRetries: positiveInt("MASTIC_MAX_RETRIES", 2),
-    maxSteps: positiveInt("MASTIC_MAX_STEPS", 24),
+    maxSteps: positiveInt("MASTIC_MAX_STEPS", 30),
     commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
     requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 120_000),
     ...overrides,
