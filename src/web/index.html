@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mastic</title>
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">mastic</div>
+      <div class="runline">
+        <span id="run-goal" class="goal">载入中…</span>
+        <span id="run-status" class="pill">—</span>
+      </div>
+      <select id="run-picker" class="run-picker" aria-label="选择运行"></select>
+    </header>
+
+    <main class="layout">
+      <section class="panel dag-panel">
+        <h2 class="panel-title">任务树</h2>
+        <div id="dag" class="dag"></div>
+        <div id="legend" class="legend"></div>
+      </section>
+
+      <section class="panel doc-panel">
+        <div class="tabs" id="tabs">
+          <button class="tab is-active" data-view="report">交付报告</button>
+          <button class="tab" data-view="task">任务书</button>
+        </div>
+        <div id="doc" class="doc"></div>
+      </section>
+
+      <section class="panel event-panel">
+        <h2 class="panel-title">
+          事件流 <span id="live-dot" class="dot" title="实时"></span>
+        </h2>
+        <ol id="events" class="events"></ol>
+      </section>
+    </main>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

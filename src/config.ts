@@ -2,18 +2,27 @@ export interface Config {
   apiKey: string;
   baseUrl: string;
   model: string;
-  systemPrompt: string;
-  /** 上下文涨到这么多 token 就压一次。 */
-  compactAt: number;
-  /** 压缩时原样保留的最近 token 量。 */
-  keepRecent: number;
+  /** agent 动手的目录。任务书里的相对路径、验收命令的 cwd 都相对它。 */
+  workspace: string;
+  /** 同时跑几个 worker。任务树里互不依赖的节点按这个上限并行。 */
+  concurrency: number;
+  /** 被 verifier 判 contradicted 之后,最多重派几次。 */
+  maxRetries: number;
+  /** 单个 worker 一轮最多几次工具往返 —— 防模型无限往下钻。 */
+  maxSteps: number;
+  /** 跑验收命令 / 重放证据的超时(毫秒)。 */
+  commandTimeoutMs: number;
+  /**
+   * 模型流多久没有新内容就判连接死了(毫秒)。
+   *
+   * 是**空闲**超时不是总时长超时 —— 长回答本来就该慢慢吐,卡死的是那种
+   * 一个字节都不再来的连接。没有这道闸,一次断流就能让 mastic run 永久挂住。
+   */
+  requestIdleTimeoutMs: number;
 }
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com/v1";
-const DEFAULT_MODEL = "deepseek-flash";
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
-const DEFAULT_COMPACT_AT = 120_000;
-const DEFAULT_KEEP_RECENT = 40_000;
+const DEFAULT_MODEL = "deepseek-chat";
 
 function optional(name: string): string | undefined {
   const value = process.env[name]?.trim();
@@ -31,7 +40,7 @@ function positiveInt(name: string, fallback: number): number {
   return Math.floor(value);
 }
 
-export function loadConfig(): Config {
+export function loadConfig(overrides: Partial<Config> = {}): Config {
   const apiKey = optional("OPENAI_API_KEY");
   if (!apiKey) {
     throw new Error(
@@ -41,22 +50,17 @@ export function loadConfig(): Config {
     );
   }
 
-  const compactAt = positiveInt("COMPACT_AT", DEFAULT_COMPACT_AT);
-  const keepRecent = positiveInt("KEEP_RECENT", DEFAULT_KEEP_RECENT);
-  if (keepRecent >= compactAt) {
-    throw new Error(
-      `KEEP_RECENT(${keepRecent})必须小于 COMPACT_AT(${compactAt})——` +
-        "否则压完立刻又到阈值,会变成每轮都重压。",
-    );
-  }
-
   return {
     apiKey,
     // 去掉结尾斜杠,免得拼出 //chat/completions
     baseUrl: (optional("OPENAI_BASE_URL") ?? DEFAULT_BASE_URL).replace(/\/+$/, ""),
     model: optional("OPENAI_MODEL") ?? DEFAULT_MODEL,
-    systemPrompt: optional("SYSTEM_PROMPT") ?? DEFAULT_SYSTEM_PROMPT,
-    compactAt,
-    keepRecent,
+    workspace: optional("MASTIC_WORKSPACE") ?? process.cwd(),
+    concurrency: positiveInt("MASTIC_CONCURRENCY", 3),
+    maxRetries: positiveInt("MASTIC_MAX_RETRIES", 2),
+    maxSteps: positiveInt("MASTIC_MAX_STEPS", 24),
+    commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
+    requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 120_000),
+    ...overrides,
   };
 }

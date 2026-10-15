@@ -1,0 +1,96 @@
+import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { dirname } from "node:path";
+import type { RunPaths } from "./workspace.ts";
+
+export type EventKind =
+  | "run_start"
+  | "plan_done"
+  | "task_start"
+  | "task_step"
+  | "task_retry"
+  | "task_verdict"
+  | "task_skipped"
+  | "run_done";
+
+export interface RunEvent {
+  /** 单调递增 —— 前端断线重连时靠它续上。 */
+  seq: number;
+  at: string;
+  run: string;
+  kind: EventKind;
+  task?: string;
+  detail: string;
+}
+
+export interface EventBus {
+  emit(event: Omit<RunEvent, "seq" | "at" | "run">): void;
+  /** 返回退订函数。 */
+  subscribe(listener: (event: RunEvent) => void): () => void;
+  history(): RunEvent[];
+}
+
+/**
+ * 只追加的事件流。
+ *
+ * 落盘给前端读、给事后复盘;内存里留一份给 SSE 订阅者。
+ * 两处写的是同一串事件 —— 不存两份真相。
+ */
+export function createEventBus(paths: RunPaths, runId: string): EventBus {
+  const events: RunEvent[] = [];
+  const listeners = new Set<(event: RunEvent) => void>();
+
+  // 串行化写入:并发 worker 同时 emit 时,appendFile 顺序错乱会让 jsonl 里
+  // 出现半行。用一个 promise 链把写操作排成队。
+  let writeChain: Promise<void> = Promise.resolve();
+
+  return {
+    emit(event) {
+      const full: RunEvent = {
+        seq: events.length + 1,
+        at: new Date().toISOString(),
+        run: runId,
+        ...event,
+      };
+
+      events.push(full);
+      for (const listener of listeners) listener(full);
+
+      writeChain = writeChain
+        .then(async () => {
+          await mkdir(dirname(paths.eventsFile), { recursive: true });
+          await appendFile(paths.eventsFile, `${JSON.stringify(full)}\n`, "utf8");
+        })
+        .catch(() => {
+          // 事件流写失败不该拖垮正在跑的任务 —— 它只是旁路记录
+        });
+    },
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+
+    history() {
+      return [...events];
+    },
+  };
+}
+
+/** 从磁盘读回一次运行的完整事件流 —— 重开前端时用。 */
+export async function readEvents(paths: RunPaths): Promise<RunEvent[]> {
+  try {
+    const raw = await readFile(paths.eventsFile, "utf8");
+    return raw
+      .split("\n")
+      .filter((line) => line.trim() !== "")
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as RunEvent];
+        } catch {
+          return []; // 半行就跳过,不因为一行坏数据丢掉整段历史
+        }
+      });
+  } catch {
+    return [];
+  }
+}

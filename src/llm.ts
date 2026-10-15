@@ -120,24 +120,47 @@ export async function streamChat(
   messages: Message[],
   options: StreamOptions = {},
 ): Promise<ChatResult> {
-  const response = await fetch(`${config.baseUrl}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${config.apiKey}`,
-    },
-    body: JSON.stringify({
-      model: config.model,
-      messages,
-      stream: true,
-      ...(options.tools?.length ? { tools: options.tools } : {}),
-    }),
-  });
+  // 空闲超时:每收到一行就把闸门往后推。卡住的连接不会自己报错,
+  // 没有这道闸,一次断流就能让整轮 run 永久挂在那里。
+  const controller = new AbortController();
+  let idleTimer: NodeJS.Timeout | undefined;
+
+  const armIdleTimer = (): void => {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), config.requestIdleTimeoutMs);
+  };
+
+  let response: Response;
+  try {
+    armIdleTimer();
+    response = await fetch(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${config.apiKey}`,
+      },
+      body: JSON.stringify({
+        model: config.model,
+        messages,
+        stream: true,
+        ...(options.tools?.length ? { tools: options.tools } : {}),
+      }),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
+    if (controller.signal.aborted) {
+      throw new Error(`连接 ${config.requestIdleTimeoutMs}ms 没吐出任何东西,判定断流,已中止。`);
+    }
+    throw error;
+  }
 
   if (!response.ok) {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
     throw new Error(describeFailure(response.status, await response.text()));
   }
   if (!response.body) {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
     throw new Error("响应没有 body,无法读取流。");
   }
 
@@ -146,39 +169,51 @@ export async function streamChat(
   let finishReason: string | null = null;
   const pending = new Map<number, { id: string; name: string; arguments: string }>();
 
-  for await (const line of readLines(response.body)) {
-    if (!line.startsWith("data:")) continue;
+  try {
+    for await (const line of readLines(response.body)) {
+      armIdleTimer();
+      if (!line.startsWith("data:")) continue;
 
-    const payload = line.slice("data:".length).trim();
-    if (payload === "[DONE]") break;
-    if (!payload) continue;
+      const payload = line.slice("data:".length).trim();
+      if (payload === "[DONE]") break;
+      if (!payload) continue;
 
-    const chunk = JSON.parse(payload) as StreamChunk;
-    // 用量只在收尾的 chunk 上出现一次,一路覆盖留下最后那个
-    if (chunk.usage) usage = chunk.usage;
+      const chunk = JSON.parse(payload) as StreamChunk;
+      // 用量只在收尾的 chunk 上出现一次,一路覆盖留下最后那个
+      if (chunk.usage) usage = chunk.usage;
 
-    const choice = chunk.choices?.[0];
-    if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const choice = chunk.choices?.[0];
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
 
-    const delta = choice?.delta;
-    if (!delta) continue;
+      const delta = choice?.delta;
+      if (!delta) continue;
 
-    if (delta.content) {
-      reply += delta.content;
-      options.onDelta?.(delta.content);
+      if (delta.content) {
+        reply += delta.content;
+        options.onDelta?.(delta.content);
+      }
+
+      for (const fragment of delta.tool_calls ?? []) {
+        const index = fragment.index ?? 0;
+        const call = pending.get(index) ?? { id: "", name: "", arguments: "" };
+
+        // 首片段带 id/name,后续片段只续 arguments
+        if (fragment.id) call.id = fragment.id;
+        if (fragment.function?.name) call.name = fragment.function.name;
+        if (fragment.function?.arguments) call.arguments += fragment.function.arguments;
+
+        pending.set(index, call);
+      }
     }
-
-    for (const fragment of delta.tool_calls ?? []) {
-      const index = fragment.index ?? 0;
-      const call = pending.get(index) ?? { id: "", name: "", arguments: "" };
-
-      // 首片段带 id/name,后续片段只续 arguments
-      if (fragment.id) call.id = fragment.id;
-      if (fragment.function?.name) call.name = fragment.function.name;
-      if (fragment.function?.arguments) call.arguments += fragment.function.arguments;
-
-      pending.set(index, call);
+  } catch (error) {
+    // 流中途断掉时,把已经拼好的部分丢掉、报清楚原因 —— 半截的工具调用
+    // 比直接失败更危险,它会被当成完整的调用来执行。
+    if (controller.signal.aborted) {
+      throw new Error(`流读到一半断了(${config.requestIdleTimeoutMs}ms 没有新内容),已中止。`);
     }
+    throw error;
+  } finally {
+    if (idleTimer !== undefined) clearTimeout(idleTimer);
   }
 
   const toolCalls: ToolCall[] = [...pending.entries()]

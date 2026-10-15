@@ -8,6 +8,10 @@
 node_modules/
 dist/
 
+# mastic 自己跑出来的运行产物(任务书 / 交付报告 / 事件流)
+# 想留证据给前端看的时候用 `mastic ui --run <id>`,不必进 git。
+.mastic/
+
 # Secrets — the API key lives in .env, never commit it (.env.example is the template)
 .env
 .env.*

@@ -7,11 +7,16 @@
     "node": ">=23.6"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/main.ts",
+    "mastic": "node --env-file-if-exists=.env src/cli.ts",
+    "start": "npm run mastic",
+    "test": "node --test 'test/*.test.ts'",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "typescript": "^5.8.0"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
   }
 }
