@@ -46,6 +46,13 @@ interface ActiveRun {
   startedAt: string;
   finished: boolean;
   error?: string;
+  /**
+   * 这次运行到目前为止的全部事件,含**不落盘**的推理摘录。
+   *
+   * 活跃的运行直接从这份内存流给界面 —— 读文件的话,那些只该实时看的
+   * 东西就看不到了。
+   */
+  live: RunEvent[];
 }
 
 /**
@@ -147,6 +154,45 @@ async function serveAsset(pathname: string): Promise<Response> {
  * 一边跑一边看才是最常用的姿势,内存里那份事件流对方根本拿不到。
  * 200ms 是为了让界面看着是"流"出来的,而不是一跳一跳的。
  */
+/**
+ * 正在跑的那次:直接推内存里的事件,包括不进日志的推理摘录。
+ *
+ * 跑完就断开,浏览器会重连 —— 那时走文件那条路,靠 seq 去重不会重复。
+ * 这是对的:推理摘录本来就是**当时**才有意义的东西。
+ */
+function liveEventStream(run: ActiveRun): Response {
+  const encoder = new TextEncoder();
+  let sent = 0;
+  let timer: NodeJS.Timeout | undefined;
+
+  const stream = new ReadableStream({
+    start(controller) {
+      const push = (): void => {
+        for (const event of run.live.slice(sent)) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
+        }
+        sent = run.live.length;
+      };
+
+      push();
+      timer = setInterval(() => {
+        push();
+        if (run.finished) {
+          if (timer !== undefined) clearInterval(timer);
+          controller.close();
+        }
+      }, 200);
+    },
+    cancel() {
+      if (timer !== undefined) clearInterval(timer);
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "content-type": "text/event-stream; charset=utf-8", "cache-control": "no-cache" },
+  });
+}
+
 function eventStream(paths: RunPaths): Response {
   const encoder = new TextEncoder();
   let sent = 0;
@@ -191,6 +237,12 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
       return run !== undefined && !run.finished;
     },
 
+    /** 这个进程里正跑着的那次 —— 有它就能推内存里的实时流。 */
+    activeRun(runId: string): ActiveRun | undefined {
+      const run = active.get(runId);
+      return run !== undefined && !run.finished ? run : undefined;
+    },
+
     /** 起一次运行。立刻返回 runId,活儿在后台跑。 */
     start(goal: string, images: IncomingImage[] = []): { runId: string } | { error: string } {
       // 只在真的要跑的时候才要 key —— 光看界面不需要
@@ -208,6 +260,7 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
         controller,
         startedAt: new Date().toISOString(),
         finished: false,
+        live: [],
       };
       active.set(runId, entry);
 
@@ -219,6 +272,7 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
         runId,
         signal: controller.signal,
         ...(images.length === 0 ? {} : { images }),
+        onEvent: (event) => entry.live.push(event),
       })
         .then((result) => {
           entry.finished = true;
@@ -339,7 +393,11 @@ async function route(
 
       const paths = runPaths(workspace, id);
 
-      if (match[2] === "/events") return eventStream(paths);
+      if (match[2] === "/events") {
+        // 正在这个进程里跑 → 内存流(含实时推理);否则读文件(已落盘的记录)
+        const running = runs.activeRun(id);
+        return running === undefined ? eventStream(paths) : liveEventStream(running);
+      }
       if (match[2] === "/cancel") {
         if (request.method !== "POST") return json({ error: "用 POST" }, 405);
         return json({ cancelled: runs.cancel(id) });

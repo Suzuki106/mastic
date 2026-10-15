@@ -35,6 +35,14 @@ export interface RunEvent {
   kind: EventKind;
   task?: string;
   detail: string;
+  /**
+   * 只推给正在看的界面,**不写进 events.jsonl**。
+   *
+   * 推理摘录就是这种东西:它是"此刻在想什么"的实时指标,不是这次运行的记录。
+   * 落盘的话,日志里会塞满一条条残片 —— 每条都是截出来的,每条都得标个省略号,
+   * 读起来像坏了。而事后翻记录的人要的是结论,不是当时的思考草稿。
+   */
+  transient?: boolean;
 }
 
 export interface EventBus {
@@ -69,6 +77,9 @@ export function createEventBus(paths: RunPaths, runId: string): EventBus {
 
       events.push(full);
       for (const listener of listeners) listener(full);
+
+      // 临时的到此为止:推给订阅者就够了,不落盘
+      if (full.transient === true) return;
 
       writeChain = writeChain
         .then(async () => {
