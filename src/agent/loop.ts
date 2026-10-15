@@ -133,25 +133,27 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
     // 推理模型会先想再答,想的过程可能几分钟不产出任何 content。
     // 不发信号的话,界面在这整段时间里是死的 —— 看着像卡住,其实在正常思考。
+    //
+    // 每次调用**只发两条**:开始一条、想完一条。中间不按秒刷 ——
+    // "它还活着"该由界面上一颗走动的秒表来表达,而不是靠往日志里灌几十条
+    // 几乎一样的记录。那样只会把真正发生的事淹掉。
     let reasoning = "";
-    let lastPing = 0;
     options.onEvent?.({ kind: "thinking", detail: "正在请求模型…" });
 
     const { reply, toolCalls, usage: turnUsage } = await chat(options.config, messages, {
       tools: schemas,
       onReasoning: (text) => {
-        // 只留尾巴:推理有几万字,全留着没意义,内存也不该这么花
-        reasoning = `${reasoning}${text}`.slice(-400);
-
-        const now = Date.now();
-        if (now - lastPing < 4000) return;
-        lastPing = now;
-        options.onEvent?.({
-          kind: "thinking",
-          detail: `思考中… ${reasoning.replace(/\s+/g, " ").trim().slice(-120)}`,
-        });
+        // 只留尾巴:推理动辄几万字,全留着没意义,内存也不该这么花
+        reasoning = `${reasoning}${text}`.slice(-600);
       },
     });
+
+    if (reasoning.trim() !== "") {
+      options.onEvent?.({
+        kind: "thinking",
+        detail: `想完了:${reasoning.replace(/\s+/g, " ").trim().slice(-160)}`,
+      });
+    }
     usage = addUsage(usage, turnUsage);
 
     if (reply.trim() !== "") {
