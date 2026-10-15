@@ -1,7 +1,11 @@
 import type { DocEntry, Evidence, ReportData, TaskData } from "../api";
-import { CheckCaveatIcon, CheckFailedIcon, CheckPassedIcon, DocumentIcon, ReportIcon, TaskIcon } from "../icons";
+import { CheckCaveatIcon, CheckFailedIcon, CheckPassedIcon, DocumentIcon } from "../icons";
 import { Markdown } from "../lib/markdown";
 import { StatusBadge } from "./StatusBadge";
+
+export function anchorId(taskId: string): string {
+  return `task-${taskId}`;
+}
 
 function CheckMark({ passed, caveat }: { passed: boolean; caveat?: boolean }) {
   if (caveat === true) {
@@ -16,7 +20,7 @@ function CheckMark({ passed, caveat }: { passed: boolean; caveat?: boolean }) {
 
 function SectionTitle({ children }: { children: string }) {
   return (
-    <h3 className="mt-6 mb-2 text-[11px] font-semibold tracking-[0.1em] text-faint uppercase">{children}</h3>
+    <h4 className="mt-5 mb-2 text-[11px] font-semibold tracking-[0.1em] text-faint uppercase">{children}</h4>
   );
 }
 
@@ -46,9 +50,7 @@ function AcceptanceList({ task }: { task: TaskData }) {
 
 function VerdictSection({ report }: { report: ReportData }) {
   const verdict = report.verdict;
-  if (verdict === undefined) {
-    return <p className="text-[13px] text-faint">还没有裁定。</p>;
-  }
+  if (verdict === undefined) return <p className="text-[13px] text-faint">还没有裁定。</p>;
 
   return (
     <div>
@@ -74,7 +76,9 @@ function VerdictSection({ report }: { report: ReportData }) {
                 </span>
               </div>
               <div
-                className={`mt-0.5 text-[12px] leading-relaxed ${check.caveat === true ? "text-unverified" : "text-faint"}`}
+                className={`mt-0.5 text-[12px] leading-relaxed ${
+                  check.caveat === true ? "text-unverified" : "text-faint"
+                }`}
               >
                 {check.detail}
               </div>
@@ -89,7 +93,7 @@ function VerdictSection({ report }: { report: ReportData }) {
 /**
  * 证据那一行。
  *
- * 命令证据也要带上哈希前几位 —— 那是"这条证据可以被重放核对"的凭据,
+ * 命令证据也带上哈希前几位 —— 那是"这条证据可以被重放核对"的凭据,
  * 只写"退出码 0"的话,读者没法区分它和一句口头保证。
  */
 function evidenceLabel(evidence: Evidence): string {
@@ -126,63 +130,45 @@ function ClaimsSection({ report }: { report: ReportData }) {
   );
 }
 
-export interface DocumentViewProps {
+export interface TaskSectionProps {
+  taskId: string;
   task: DocEntry<TaskData> | undefined;
   report: DocEntry<ReportData> | undefined;
   view: "report" | "task";
-  onView: (view: "report" | "task") => void;
 }
 
-export function DocumentView({ task, report, view, onView }: DocumentViewProps) {
+/**
+ * 一个任务在长页里的一节。
+ *
+ * 标题条是 sticky 的:顺着往下读的时候,总知道当前这一段属于哪个任务 ——
+ * 这正是之前"点一下整个换掉"那种做法给不了的东西。
+ */
+export function TaskSection({ taskId, task, report, view }: TaskSectionProps) {
   const taskData = task?.doc?.data ?? null;
   const reportData = report?.doc?.data ?? null;
-  const title = taskData?.id ?? reportData?.task ?? null;
-
-  if (title === null) {
-    return (
-      <div className="flex h-full items-center justify-center text-[13px] text-faint">
-        左边点一个任务。
-      </div>
-    );
-  }
-
-  const tabClass = (active: boolean): string =>
-    `inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] transition-colors ${
-      active ? "bg-slate-100 font-medium text-slate-900" : "text-muted hover:text-slate-900"
-    }`;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-line px-5 py-3">
-        <span className="font-mono text-[13px] font-semibold text-slate-900">{title}</span>
+    <section id={anchorId(taskId)} data-task={taskId} className="scroll-mt-4 border-b border-line last:border-b-0">
+      <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-white/95 px-5 py-2.5 backdrop-blur">
+        <span className="font-mono text-[13px] font-semibold text-slate-900">{taskId}</span>
+        {taskData?.title !== undefined && (
+          <span className="truncate text-[12.5px] text-muted">{taskData.title}</span>
+        )}
         {reportData !== null && <StatusBadge status={reportData.status} />}
-        <div className="ml-auto flex gap-1">
-          <button className={tabClass(view === "report")} onClick={() => onView("report")}>
-            <ReportIcon size={13} />
-            交付报告
-          </button>
-          <button className={tabClass(view === "task")} onClick={() => onView("task")}>
-            <TaskIcon size={13} />
-            任务书
-          </button>
-        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="px-5 py-4">
         {view === "task" ? (
           taskData === null ? (
             <p className="text-[13px] text-faint">没有这份任务书。</p>
           ) : (
             <>
-              {taskData.title !== undefined && (
-                <p className="text-[15px] font-medium text-slate-900">{taskData.title}</p>
-              )}
               {taskData.goal !== undefined && (
-                <p className="mt-1 text-[13px] leading-relaxed text-muted">{taskData.goal}</p>
+                <p className="text-[13px] leading-relaxed text-muted">{taskData.goal}</p>
               )}
               <SectionTitle>验收</SectionTitle>
               <AcceptanceList task={taskData} />
-              {task?.doc !== null && task?.doc !== undefined && task.doc.body !== "" && (
+              {task?.doc != null && task.doc.body !== "" && (
                 <>
                   <SectionTitle>正文</SectionTitle>
                   <Markdown source={task.doc.body} />
@@ -191,9 +177,9 @@ export function DocumentView({ task, report, view, onView }: DocumentViewProps) 
             </>
           )
         ) : reportData === null ? (
-          <div className="flex flex-col items-center gap-2 py-10 text-faint">
-            <DocumentIcon size={20} />
-            <p className="text-[13px]">{title} 还没有交付报告。</p>
+          <div className="flex items-center gap-2 py-6 text-faint">
+            <DocumentIcon size={16} />
+            <span className="text-[13px]">还没有交付报告。</span>
           </div>
         ) : (
           <>
@@ -244,7 +230,7 @@ export function DocumentView({ task, report, view, onView }: DocumentViewProps) 
               </>
             )}
 
-            {report?.doc !== null && report?.doc !== undefined && report.doc.body !== "" && (
+            {report?.doc != null && report.doc.body !== "" && (
               <>
                 <SectionTitle>正文</SectionTitle>
                 <Markdown source={report.doc.body} />
@@ -253,6 +239,6 @@ export function DocumentView({ task, report, view, onView }: DocumentViewProps) 
           </>
         )}
       </div>
-    </div>
+    </section>
   );
 }

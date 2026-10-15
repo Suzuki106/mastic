@@ -91,29 +91,7 @@ body {
   scrollbar-color: var(--color-line-strong) transparent;
 }
 
-/* React Flow:按白底调 */
-.react-flow__attribution {
-  background: transparent;
-  color: var(--color-faint);
-  font-size: 10px;
-}
-.react-flow__edge-path {
-  stroke: var(--color-line-strong);
-  stroke-width: 1.5;
-}
-.react-flow__handle {
-  opacity: 0;
-  pointer-events: none;
-}
-.react-flow__controls-button {
-  background: #fff;
-  border-color: var(--color-line);
-  color: var(--color-muted);
-  fill: var(--color-muted);
-}
-.react-flow__controls-button:hover {
-  background: #f8fafc;
-}
-.react-flow__node {
-  cursor: pointer;
+/* 长页里跳转时,给 sticky 标题条留出高度,不然目标会被压在它下面 */
+section[id^="task-"] {
+  scroll-margin-top: 4px;
 }

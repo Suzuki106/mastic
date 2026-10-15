@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { DocEntry, ReportData, TaskData } from "../api";
-import { DocumentView } from "./DocumentView";
+import { TaskSection, anchorId } from "./TaskSection";
 
 function taskEntry(data: Partial<TaskData>): DocEntry<TaskData> {
   return {
@@ -36,11 +36,18 @@ function render(
   view: "report" | "task" = "report",
 ): string {
   return renderToStaticMarkup(
-    <DocumentView task={task} report={report} view={view} onView={() => {}} />,
+    <TaskSection taskId="T-001" task={task} report={report} view={view} />,
   );
 }
 
-describe("文档视图", () => {
+describe("任务小节", () => {
+  // 侧栏点击靠这个 id 定位 —— 它没了,"跳转到对应位置"就整个失效
+  it("每一节都带可跳转的锚点", () => {
+    const html = render(taskEntry({}), reportEntry({}));
+    expect(html).toContain(`id="${anchorId("T-001")}"`);
+    expect(html).toContain('data-task="T-001"');
+  });
+
   it("任务书视图列出验收标准", () => {
     const html = render(
       taskEntry({
@@ -98,7 +105,7 @@ describe("文档视图", () => {
     expect(html).toContain("created");
   });
 
-  it("主张带着证据一起显示", () => {
+  it("主张带着证据一起显示,命令证据要带哈希", () => {
     const html = render(
       taskEntry({}),
       reportEntry({
@@ -115,11 +122,10 @@ describe("文档视图", () => {
   });
 
   it("没有报告时给提示而不是崩掉", () => {
-    const html = render(taskEntry({}), undefined);
-    expect(html).toContain("还没有交付报告");
+    expect(render(taskEntry({}), undefined)).toContain("还没有交付报告");
   });
 
-  it("什么都没选时给提示", () => {
-    expect(render(undefined, undefined)).toContain("左边点一个任务");
+  it("连任务书都没有时也不崩", () => {
+    expect(render(undefined, undefined)).toContain("还没有交付报告");
   });
 });

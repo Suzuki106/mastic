@@ -11,11 +11,11 @@ import {
   type TaskData,
 } from "./api";
 import { Composer } from "./components/Composer";
-import { DocumentView } from "./components/DocumentView";
 import { EventStream } from "./components/EventStream";
 import { StatusBadge } from "./components/StatusBadge";
-import { TaskGraph } from "./components/TaskGraph";
-import { ContradictedIcon, TaskIcon, WorkspaceIcon } from "./icons";
+import { TaskSection, anchorId } from "./components/TaskSection";
+import { TaskSidebar } from "./components/TaskSidebar";
+import { ContradictedIcon, ReportIcon, TaskIcon, WorkspaceIcon } from "./icons";
 
 /** 这几种事件意味着"文档变了",值得重新拉一次。其余事件只用于实时态。 */
 const DOC_CHANGING = new Set(["plan_done", "task_verdict", "run_done", "task_skipped"]);
@@ -24,7 +24,7 @@ export default function App() {
   const [runs, setRuns] = useState<RunSummary[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [payload, setPayload] = useState<RunPayload | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [active, setActive] = useState<string | null>(null);
   const [view, setView] = useState<"report" | "task">("report");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,8 +32,8 @@ export default function App() {
 
   const { events, live } = useEventStream(runId);
   const lastSeq = useRef(0);
+  const contentRef = useRef<HTMLDivElement>(null);
 
-  /* 运行列表 —— 只在挂载时和一次运行结束时拉 */
   const refreshRuns = useCallback(async (): Promise<void> => {
     try {
       const { runs: list, workspace: dir } = await fetchRuns();
@@ -48,7 +48,6 @@ export default function App() {
     void refreshRuns();
   }, [refreshRuns]);
 
-  /* 选中的运行一变,拉它的文档并重置进度指针 */
   useEffect(() => {
     lastSeq.current = 0;
     if (runId === null) {
@@ -61,7 +60,7 @@ export default function App() {
       .then((next) => {
         if (cancelled) return;
         setPayload(next);
-        setSelected((current) => current ?? next.tasks[0]?.doc?.data?.id ?? null);
+        setActive((current) => current ?? next.tasks[0]?.doc?.data?.id ?? null);
       })
       .catch((cause: unknown) => {
         if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
@@ -72,7 +71,6 @@ export default function App() {
     };
   }, [runId]);
 
-  /* 事件流:只有"文档变了"的事件才重新拉文档,其余靠本地推导 */
   useEffect(() => {
     if (runId === null || events.length === 0) return;
     const fresh = events.filter((event) => event.seq > lastSeq.current);
@@ -80,17 +78,15 @@ export default function App() {
 
     const shouldRefetch = fresh.some((event) => DOC_CHANGING.has(event.kind));
     lastSeq.current = events[events.length - 1]?.seq ?? 0;
-
     if (!shouldRefetch) return;
+
     void fetchRun(runId).then((next) => {
       setPayload(next);
-      // 新出现的任务自动选中第一个,省得每次跑完还要手点
-      setSelected((current) => current ?? next.tasks[0]?.doc?.data?.id ?? null);
+      setActive((current) => current ?? next.tasks[0]?.doc?.data?.id ?? null);
     });
     void refreshRuns();
   }, [events, runId, refreshRuns]);
 
-  /* 运行结束后把 busy 收掉 */
   useEffect(() => {
     if (events.some((event) => event.kind === "run_done")) setBusy(false);
   }, [events]);
@@ -106,10 +102,6 @@ export default function App() {
     [payload],
   );
 
-  /**
-   * 任务状态:以报告里的裁定为准;还没裁定的,就从事件流里推 ——
-   * 于是"正在跑"是实时亮起来的,不用等下一次拉文档。
-   */
   const statusOfTask = useCallback(
     (taskId: string): string => {
       const settled = reportsForTask(taskId)?.status;
@@ -120,12 +112,49 @@ export default function App() {
     [events, reportsForTask],
   );
 
+  /* 滚动到某一节 —— 侧栏点击走这里 */
+  const jumpTo = useCallback((taskId: string): void => {
+    const node = document.getElementById(anchorId(taskId));
+    if (node === null) return;
+    setActive(taskId);
+    node.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  /**
+   * 反过来:滚到哪儿,侧栏就高亮哪儿。
+   *
+   * 只看每节顶部有没有进入视口上方 25% 那一条带 ——
+   * 比起算可见面积,这个在长文档里更稳,也不会因为两节同时露出来而跳来跳去。
+   */
+  useEffect(() => {
+    const root = contentRef.current;
+    if (root === null || tasks.length === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const hit = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        const id = hit?.target.getAttribute("data-task");
+        if (id !== null && id !== undefined) setActive(id);
+      },
+      { root, rootMargin: "0px 0px -75% 0px", threshold: 0 },
+    );
+
+    for (const task of tasks) {
+      const node = document.getElementById(anchorId(task.id));
+      if (node !== null) observer.observe(node);
+    }
+
+    return () => observer.disconnect();
+  }, [tasks, view]);
+
   const start = async (goal: string): Promise<void> => {
     setError(null);
     setBusy(true);
     try {
       const { runId: created } = await startRun(goal);
-      setSelected(null);
+      setActive(null);
       setRunId(created);
       await refreshRuns();
     } catch (cause) {
@@ -136,6 +165,11 @@ export default function App() {
 
   const current = runs.find((run) => run.id === runId);
   const isRunning = busy || current?.running === true;
+
+  const tabClass = (on: boolean): string =>
+    `inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] transition-colors ${
+      on ? "bg-slate-100 font-medium text-slate-900" : "text-muted hover:text-slate-900"
+    }`;
 
   return (
     <div className="flex h-full flex-col bg-surface">
@@ -177,7 +211,7 @@ export default function App() {
         <select
           value={runId ?? ""}
           onChange={(event) => {
-            setSelected(null);
+            setActive(null);
             setRunId(event.target.value === "" ? null : event.target.value);
           }}
           className="max-w-[220px] shrink-0 rounded-lg border border-line-strong bg-white px-2 py-1 font-mono text-[11.5px] text-muted outline-none"
@@ -192,38 +226,54 @@ export default function App() {
         </select>
       </header>
 
-      <main className="grid min-h-0 flex-1 grid-cols-[minmax(260px,320px)_minmax(0,1fr)_minmax(300px,380px)]">
-        <section className="flex min-h-0 flex-col border-r border-line">
+      <main className="grid min-h-0 flex-1 grid-cols-[minmax(220px,280px)_minmax(0,1fr)_minmax(300px,380px)]">
+        <section className="flex min-h-0 flex-col overflow-y-auto border-r border-line">
           <div className="flex shrink-0 items-center gap-2 border-b border-line px-4 py-3">
             <TaskIcon size={13} className="text-faint" />
-            <span className="text-[11px] font-semibold tracking-[0.1em] text-faint uppercase">任务树</span>
+            <span className="text-[11px] font-semibold tracking-[0.1em] text-faint uppercase">任务</span>
             <span className="ml-auto font-mono text-[11px] text-faint">{tasks.length}</span>
           </div>
-          <div className="min-h-0 flex-1">
-            <TaskGraph tasks={tasks} statusOfTask={statusOfTask} selected={selected} onSelect={setSelected} />
-          </div>
+          <TaskSidebar tasks={tasks} statusOfTask={statusOfTask} active={active} onJump={jumpTo} />
         </section>
 
         <section className="flex min-h-0 flex-col">
-          <div className="min-h-0 flex-1">
-            {selected === null ? (
+          <div className="flex shrink-0 items-center gap-1 border-b border-line px-4 py-2">
+            <button className={tabClass(view === "report")} onClick={() => setView("report")}>
+              <ReportIcon size={13} />
+              交付报告
+            </button>
+            <button className={tabClass(view === "task")} onClick={() => setView("task")}>
+              <TaskIcon size={13} />
+              任务书
+            </button>
+            <span className="ml-auto text-[11.5px] text-faint">
+              {active === null ? "" : `当前 ${active}`}
+            </span>
+          </div>
+
+          <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto">
+            {tasks.length === 0 ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 px-8 text-center">
                 <TaskIcon size={22} className="text-faint" />
                 <p className="text-[13px] text-faint">
                   {runId === null
                     ? "在下面写下你要做的事，然后回车。"
-                    : "左边点一个任务，这里会显示它的任务书和交付报告。"}
+                    : "planner 交卷后，每个任务会在这里展开成一节。"}
                 </p>
               </div>
             ) : (
-              <DocumentView
-                task={payload?.tasks.find((entry) => entry.doc?.data?.id === selected)}
-                report={payload?.reports.find((entry) => entry.doc?.data?.task === selected)}
-                view={view}
-                onView={setView}
-              />
+              tasks.map((task) => (
+                <TaskSection
+                  key={task.id}
+                  taskId={task.id}
+                  task={payload?.tasks.find((entry) => entry.doc?.data?.id === task.id)}
+                  report={payload?.reports.find((entry) => entry.doc?.data?.task === task.id)}
+                  view={view}
+                />
+              ))
             )}
           </div>
+
           <Composer onSubmit={(goal) => void start(goal)} busy={isRunning} error={error} />
         </section>
 
