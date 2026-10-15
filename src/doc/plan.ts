@@ -24,8 +24,11 @@ export function validatePlan(tasks: TaskDoc[]): string[] {
     }
   }
 
-  if (problems.length === 0 && topoLayers(tasks).length < tasks.length) {
-    // 分层数少于任务数说明有环 —— Kahn 会在环上卡住
+  // 判环要看**排进去了几个任务**,不是分了几层。
+  // 拿层数跟任务数比会冤枉每一个正常的多层 DAG:
+  // A ← B、A ← C 是两层三个任务,2 < 3,会被误报成有环。
+  const placed = topoLayers(tasks).reduce((sum, layer) => sum + layer.length, 0);
+  if (problems.length === 0 && placed < tasks.length) {
     problems.push("依赖关系里存在环,没法排出执行顺序。");
   }
 

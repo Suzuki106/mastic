@@ -83,6 +83,9 @@ budget: { max_steps: 24 }
 
 字段说明:
 - \`id\` 形如 T-001,全局唯一。
+- **每个字段都写在一行里**,尤其是 \`title\` 和 \`goal\`。YAML 遇到换行就解析不了,
+  整份任务书会被打回。\`title\` 一句话就够(十几个字),要写的要求放进正文。
+  值里出现冒号或特殊符号时,用双引号包起来。
 - \`deliverable\` 必须是 \`reports/<id>.md\`。
 - \`inputs\` 的 path 是相对工作目录的真实路径。
 - \`acceptance\` 至少一条;command 级的 \`expect\` 至少写一项判据

@@ -99,6 +99,31 @@ budget: { max_steps: 10 }
     assert.ok(cyclic.some((problem) => problem.includes("环")));
     assert.ok(validatePlan([make("T-001", ["T-999"])]).some((p) => p.includes("不存在")));
   });
+
+  // 回归:曾是拿"层数"跟"任务数"比来判断环,于是每个正常的多层 DAG 都被冤枉。
+  // 这个形状是真实跑出来的 —— planner 拆出两个独立任务加一个收口任务。
+  it("菱形依赖(三层四任务)不算环", () => {
+    const make = (id: string, deps: string[]) =>
+      parseTaskDoc(`---
+id: ${id}
+title: ${id}
+goal: ${id}
+depends_on: [${deps.join(", ")}]
+deliverable: reports/${id}.md
+acceptance:
+  - { kind: command, run: "true", expect: { exit_code: 0 } }
+budget: { max_steps: 10 }
+---
+`).task!;
+
+    const diamond = [
+      make("T-001", []),
+      make("T-002", ["T-001"]),
+      make("T-003", ["T-001"]),
+      make("T-004", ["T-002", "T-003"]),
+    ];
+    assert.deepEqual(validatePlan(diamond), []);
+  });
 });
 
 describe("报告草稿", () => {
