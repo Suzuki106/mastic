@@ -18,7 +18,7 @@ import { findTool, toolSchemas, type Tool, type ToolContext } from "../tools/ind
  */
 export type ChatFn = (config: Config, messages: Message[], options?: StreamOptions) => Promise<ChatResult>;
 
-export type LoopEventKind = "assistant" | "tool" | "rejected" | "stopped";
+export type LoopEventKind = "assistant" | "tool" | "rejected" | "stopped" | "thinking";
 
 export interface LoopEvent {
   kind: LoopEventKind;
@@ -130,8 +130,27 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     }
 
     const chat = options.chat ?? streamChat;
+
+    // 推理模型会先想再答,想的过程可能几分钟不产出任何 content。
+    // 不发信号的话,界面在这整段时间里是死的 —— 看着像卡住,其实在正常思考。
+    let reasoning = "";
+    let lastPing = 0;
+    options.onEvent?.({ kind: "thinking", detail: "正在请求模型…" });
+
     const { reply, toolCalls, usage: turnUsage } = await chat(options.config, messages, {
       tools: schemas,
+      onReasoning: (text) => {
+        // 只留尾巴:推理有几万字,全留着没意义,内存也不该这么花
+        reasoning = `${reasoning}${text}`.slice(-400);
+
+        const now = Date.now();
+        if (now - lastPing < 4000) return;
+        lastPing = now;
+        options.onEvent?.({
+          kind: "thinking",
+          detail: `思考中… ${reasoning.replace(/\s+/g, " ").trim().slice(-120)}`,
+        });
+      },
     });
     usage = addUsage(usage, turnUsage);
 

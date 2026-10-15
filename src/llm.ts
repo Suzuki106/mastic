@@ -55,6 +55,7 @@ interface StreamChunk {
   choices?: Array<{
     delta?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: Array<{
         index?: number;
         id?: string;
@@ -73,6 +74,13 @@ interface ErrorBody {
 
 export interface StreamOptions {
   onDelta?: (text: string) => void;
+  /**
+   * 推理模型会先吐一段 `reasoning_content`,这期间 `content` 一直是 null。
+   *
+   * 不接这个回调的话,一个复杂目标在推理阶段可能几分钟都不产出任何东西 ——
+   * 界面上看着就像卡死了,而它其实在正常思考。
+   */
+  onReasoning?: (text: string) => void;
   tools?: ToolSchema[];
 }
 
@@ -184,6 +192,10 @@ export async function streamChat(
 
       const delta = choice?.delta;
       if (!delta) continue;
+
+      if (delta.reasoning_content) {
+        options.onReasoning?.(delta.reasoning_content);
+      }
 
       if (delta.content) {
         reply += delta.content;
