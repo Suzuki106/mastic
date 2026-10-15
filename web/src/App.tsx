@@ -3,7 +3,9 @@ import {
   cancelRun,
   fetchRun,
   fetchRuns,
+  fetchWorkspaces,
   startRun,
+  switchWorkspace,
   useEventStream,
   type ReportData,
   type RunPayload,
@@ -15,7 +17,8 @@ import { EventStream } from "./components/EventStream";
 import { StatusBadge } from "./components/StatusBadge";
 import { TaskSection, anchorId } from "./components/TaskSection";
 import { TaskSidebar } from "./components/TaskSidebar";
-import { ContradictedIcon, ReportIcon, TaskIcon, WorkspaceIcon } from "./icons";
+import { WorkspacePicker } from "./components/WorkspacePicker";
+import { ContradictedIcon, ReportIcon, TaskIcon } from "./icons";
 
 /** 这几种事件意味着"文档变了",值得重新拉一次。其余事件只用于实时态。 */
 const DOC_CHANGING = new Set(["plan_done", "task_verdict", "run_done", "task_skipped"]);
@@ -29,6 +32,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<string>("");
+  const [knownWorkspaces, setKnownWorkspaces] = useState<string[]>([]);
 
   const { events, live } = useEventStream(runId);
   const lastSeq = useRef(0);
@@ -36,13 +40,31 @@ export default function App() {
 
   const refreshRuns = useCallback(async (): Promise<void> => {
     try {
-      const { runs: list, workspace: dir } = await fetchRuns();
+      const [{ runs: list, workspace: dir }, spaces] = await Promise.all([
+        fetchRuns(),
+        fetchWorkspaces(),
+      ]);
       setRuns(list);
       setWorkspace(dir);
+      setKnownWorkspaces(spaces.known);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
   }, []);
+
+  /** 换工作区 = 换一整套运行。当前选中的运行必须一起清掉,它不属于新工作区。 */
+  const changeWorkspace = useCallback(
+    async (path: string): Promise<void> => {
+      const spaces = await switchWorkspace(path);
+      setWorkspace(spaces.current);
+      setKnownWorkspaces(spaces.known);
+      setRunId(null);
+      setActive(null);
+      lastSeq.current = 0;
+      await refreshRuns();
+    },
+    [refreshRuns],
+  );
 
   useEffect(() => {
     void refreshRuns();
@@ -176,15 +198,9 @@ export default function App() {
       <header className="flex shrink-0 items-center gap-3 border-b border-line px-5 py-3">
         <span className="text-[15px] font-semibold tracking-tight text-slate-900">mastic</span>
 
-        {/* agent 会在这个目录里动手。放在最显眼处,不然没人知道文件落在哪。 */}
+        {/* 工作区是这一页的全部上下文:文件落在哪、运行列表里有谁,都由它决定 */}
         {workspace !== "" && (
-          <span
-            className="inline-flex items-center gap-1.5 rounded-lg bg-slate-50 px-2 py-1 font-mono text-[11.5px] text-muted"
-            title={`agent 在这个目录里读写文件:${workspace}`}
-          >
-            <WorkspaceIcon size={12} className="text-faint" />
-            {workspace}
-          </span>
+          <WorkspacePicker current={workspace} known={knownWorkspaces} onSwitch={changeWorkspace} />
         )}
 
         <div className="ml-2 flex min-w-0 flex-1 items-center gap-2">

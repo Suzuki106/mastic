@@ -6,6 +6,7 @@ import { parseDoc } from "./doc/frontmatter.ts";
 import { readEvents, type RunEvent } from "./events.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { listRunIds, newRunId, readRunDoc, runPaths, type RunPaths, type RunDoc } from "./workspace.ts";
+import { loadWorkspaceRegistry, type WorkspaceRegistry } from "./workspaces.ts";
 
 export interface ServerOptions {
   workspace: string;
@@ -168,7 +169,7 @@ function eventStream(paths: RunPaths): Response {
 
 /* ── 运行管理 ───────────────────────────────────────────── */
 
-function makeRunManager(workspace: string) {
+function makeRunManager(workspaces: WorkspaceRegistry) {
   const active = new Map<string, ActiveRun>();
   let config: Config | null = null;
 
@@ -205,7 +206,8 @@ function makeRunManager(workspace: string) {
       void orchestrate({
         config,
         goal,
-        workspace,
+        // 起跑那一刻的工作区。中途切走不影响这一趟 —— 它已经在那个目录里干活了。
+        workspace: workspaces.current(),
         runId,
         signal: controller.signal,
       })
@@ -236,11 +238,23 @@ async function route(
   request: Request,
   options: ServerOptions,
   runs: ReturnType<typeof makeRunManager>,
+  workspaces: WorkspaceRegistry,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
 
   if (path.startsWith("/api/")) {
+    if (path === "/api/workspaces") {
+      return json({ current: workspaces.current(), known: workspaces.list() });
+    }
+
+    if (path === "/api/workspace" && request.method === "POST") {
+      const body = await readJsonBody(request);
+      const target = typeof body.path === "string" ? body.path : "";
+      const result = await workspaces.switchTo(target);
+      return result.ok ? json(result) : json(result, 400);
+    }
+
     if (path === "/api/runs" && request.method === "POST") {
       const body = await readJsonBody(request);
       const goal = typeof body.goal === "string" ? body.goal.trim() : "";
@@ -252,10 +266,11 @@ async function route(
     }
 
     if (path === "/api/runs") {
-      const ids = await listRunIds(options.workspace);
+      const workspace = workspaces.current();
+      const ids = await listRunIds(workspace);
       const docs = await Promise.all(
         ids.map(async (id) => {
-          const doc: RunDoc | undefined = await readRunDoc(runPaths(options.workspace, id));
+          const doc: RunDoc | undefined = await readRunDoc(runPaths(workspace, id));
           return {
             id,
             goal: doc?.goal ?? "",
@@ -266,18 +281,19 @@ async function route(
       );
       // 工作区一并带回去:界面上得能看见"活儿到底在哪个目录里干",
       // 否则用户没法知道新文件会落在哪。
-      return json({ runs: docs.reverse(), workspace: options.workspace });
+      return json({ runs: docs.reverse(), workspace });
     }
 
     const match = /^\/api\/runs\/([^/]+)(\/events|\/cancel)?$/.exec(path);
     if (match?.[1] !== undefined) {
       const id = decodeURIComponent(match[1]);
+      const workspace = workspaces.current();
       const known = runs.list().some((entry) => entry.runId === id);
-      if (!known && !(await listRunIds(options.workspace)).includes(id)) {
+      if (!known && !(await listRunIds(workspace)).includes(id)) {
         return json({ error: "没有这次运行" }, 404);
       }
 
-      const paths = runPaths(options.workspace, id);
+      const paths = runPaths(workspace, id);
 
       if (match[2] === "/events") return eventStream(paths);
       if (match[2] === "/cancel") {
@@ -297,7 +313,8 @@ async function route(
 
 export async function startServer(options: ServerOptions): Promise<RunningServer> {
   const host = options.host ?? "127.0.0.1";
-  const runs = makeRunManager(options.workspace);
+  const workspaces = await loadWorkspaceRegistry(options.workspace);
+  const runs = makeRunManager(workspaces);
 
   const server: Server = createServer((request, response) => {
     void (async () => {
@@ -325,6 +342,7 @@ export async function startServer(options: ServerOptions): Promise<RunningServer
           }),
           options,
           runs,
+          workspaces,
         );
         response.writeHead(routed.status, Object.fromEntries(routed.headers));
 

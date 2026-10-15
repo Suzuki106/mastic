@@ -131,6 +131,26 @@ export async function cancelRun(runId: string): Promise<void> {
   await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
 }
 
+export interface WorkspaceList {
+  current: string;
+  known: string[];
+}
+
+export function fetchWorkspaces(): Promise<WorkspaceList> {
+  return getJson("/api/workspaces");
+}
+
+export async function switchWorkspace(path: string): Promise<WorkspaceList> {
+  const response = await fetch("/api/workspace", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  const payload = (await response.json()) as { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+  return await fetchWorkspaces();
+}
+
 /* ── 事件流 ───────────────────────────────────────────────── */
 
 /**
