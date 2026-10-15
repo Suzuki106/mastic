@@ -12,25 +12,22 @@ export interface ToolSchema {
   function: { name: string; description: string; parameters: unknown };
 }
 
+/**
+ * 一条 user 消息的内容块。
+ *
+ * 图片走 OpenAI 那套 `image_url`,值可以是 http 地址,也可以是
+ * `data:image/png;base64,...`。本地文件只能走后者 —— 接口读不到我们的磁盘。
+ */
+export type ContentPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
 export type Message =
-  | { role: "system" | "user"; content: string }
+  | { role: "system"; content: string }
+  // user 可以是纯文本,也可以是若干内容块(带图时)
+  | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
-
-/**
- * 一条消息在上下文里占的文本量。
- * assistant 发起工具调用的那一轮 content 可能是 null,占用落在 tool_calls 上,
- * 所以两边都要算 —— 压缩靠这个数切边界。
- */
-export function contentLength(message: Message): number {
-  const own = message.content?.length ?? 0;
-  if (message.role !== "assistant" || !message.tool_calls) return own;
-
-  return message.tool_calls.reduce(
-    (sum, call) => sum + call.function.name.length + call.function.arguments.length,
-    own,
-  );
-}
 
 /** /chat/completions 的用量统计。各家 OpenAI 兼容实现的字段并不一致,
  *  所以除了三个基本项,其余一律按可选处理,缺了就按 0 记。 */

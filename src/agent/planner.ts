@@ -104,10 +104,18 @@ budget: { max_steps: 24 }
 调用 submit_plan,\`tasks\` 是一个字符串数组,每项是一份完整任务文档。
 格式或依赖有问题会被打回,照着错误改。`;
 
+export interface PlanImage {
+  /** 相对 run 目录,比如 `attachments/1.png`。 */
+  path: string;
+  dataUrl: string;
+}
+
 export interface PlanOptions {
   config: Config;
   goal: string;
   workspace: string;
+  /** 用户随需求一起传上来的图。planner 看得见,才能把要求拆对。 */
+  images?: PlanImage[];
   timeoutMs: number;
   maxOutputChars: number;
   /** 只能看、不能改的工具 —— planner 摸现场用。 */
@@ -134,10 +142,32 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
     maxOutputChars: options.maxOutputChars,
   };
 
+  const images = options.images ?? [];
+
+  // 有图时 user 消息变成内容块数组:一段文字 + 若干张图。
+  // 路径也写在文字里 —— planner 要把它们照抄进任务书的 inputs,
+  // 否则 worker 拿不到图,只能看到"图里那个按钮"这种没头没尾的描述。
+  const user = images.length === 0
+    ? `目标:\n\n${options.goal}`
+    : ([
+        {
+          type: "text" as const,
+          text:
+            `目标:\n\n${options.goal}\n\n` +
+            `## 附图(${images.length} 张)\n\n` +
+            `路径相对本次运行的目录:\n` +
+            images.map((image) => `- ${image.path}`).join("\n") +
+            `\n\n需要用到图的那些任务,把对应用户写在任务书的 inputs 里:\n` +
+            `  - { kind: image, path: "attachments/1.png" }\n` +
+            `不写进去的话,worker 看不到这张图。`,
+        },
+        ...images.map((image) => ({ type: "image_url" as const, image_url: { url: image.dataUrl } })),
+      ]);
+
   const result = await runToolLoop({
     config: options.config,
     system: SYSTEM,
-    user: `目标:\n\n${options.goal}`,
+    user,
     tools: [...options.discoveryTools, PLAN_TOOL],
     toolContext,
     terminalTool: "submit_plan",

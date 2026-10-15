@@ -1,5 +1,13 @@
 import type { Config } from "../config.ts";
-import { streamChat, type ChatResult, type Message, type StreamOptions, type ToolSchema, type Usage } from "../llm.ts";
+import {
+  streamChat,
+  type ChatResult,
+  type ContentPart,
+  type Message,
+  type StreamOptions,
+  type ToolSchema,
+  type Usage,
+} from "../llm.ts";
 import { findTool, toolSchemas, type Tool, type ToolContext } from "../tools/index.ts";
 
 /**
@@ -20,7 +28,8 @@ export interface LoopEvent {
 export interface ToolLoopOptions {
   config: Config;
   system: string;
-  user: string;
+  /** 带上图片时是内容块数组,平时就是一句话。 */
+  user: string | ContentPart[];
   tools: readonly Tool[];
   toolContext: ToolContext;
   /** 终止工具的名字。模型调用它 = 交卷。 */

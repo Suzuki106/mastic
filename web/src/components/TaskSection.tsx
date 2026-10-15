@@ -130,11 +130,19 @@ function ClaimsSection({ report }: { report: ReportData }) {
   );
 }
 
+/** 任务书里的图片路径形如 `attachments/1.png`,转成能取到的地址。 */
+export function attachmentUrl(runId: string, path: string): string {
+  const name = path.replace(/^attachments\//, "");
+  return `/api/runs/${encodeURIComponent(runId)}/attachments/${encodeURIComponent(name)}`;
+}
+
 export interface TaskSectionProps {
   taskId: string;
   task: DocEntry<TaskData> | undefined;
   report: DocEntry<ReportData> | undefined;
   view: "report" | "task";
+  /** 附图要从这次运行的目录里取。 */
+  runId: string;
 }
 
 /**
@@ -143,9 +151,13 @@ export interface TaskSectionProps {
  * 标题条是 sticky 的:顺着往下读的时候,总知道当前这一段属于哪个任务 ——
  * 这正是之前"点一下整个换掉"那种做法给不了的东西。
  */
-export function TaskSection({ taskId, task, report, view }: TaskSectionProps) {
+export function TaskSection({ taskId, task, report, view, runId }: TaskSectionProps) {
   const taskData = task?.doc?.data ?? null;
   const reportData = report?.doc?.data ?? null;
+
+  const images = (taskData?.inputs ?? []).flatMap((input) =>
+    input.kind === "image" && input.path !== undefined ? [input.path] : [],
+  );
 
   return (
     <section id={anchorId(taskId)} data-task={taskId} className="scroll-mt-4 border-b border-line last:border-b-0">
@@ -166,6 +178,25 @@ export function TaskSection({ taskId, task, report, view }: TaskSectionProps) {
               {taskData.goal !== undefined && (
                 <p className="text-[13px] leading-relaxed text-muted">{taskData.goal}</p>
               )}
+              {images.length > 0 && (
+                <>
+                  <SectionTitle>附图</SectionTitle>
+                  <ul className="flex flex-wrap gap-2">
+                    {images.map((path) => (
+                      <li key={path}>
+                        <a href={attachmentUrl(runId, path)} target="_blank" rel="noreferrer">
+                          <img
+                            src={attachmentUrl(runId, path)}
+                            alt="附图"
+                            className="max-h-44 rounded-lg border border-line transition-opacity hover:opacity-90"
+                          />
+                        </a>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+
               <SectionTitle>验收</SectionTitle>
               <AcceptanceList task={taskData} />
               {task?.doc != null && task.doc.body !== "" && (

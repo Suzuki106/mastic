@@ -12,6 +12,8 @@ export interface Config {
   maxSteps: number;
   /** 跑验收命令 / 重放证据的超时(毫秒)。 */
   commandTimeoutMs: number;
+  /** 当前模型收不收图片。关掉之后界面上不会出现上传入口。 */
+  vision: boolean;
   /**
    * 模型流多久没有新内容就判连接死了(毫秒)。
    *
@@ -27,6 +29,18 @@ const DEFAULT_MODEL = "deepseek-chat";
 function optional(name: string): string | undefined {
   const value = process.env[name]?.trim();
   return value ? value : undefined;
+}
+
+/**
+ * 只读一个开关,不碰 API key。
+ *
+ * 界面要知道"能不能传图"才能决定要不要显示上传按钮,而这件事不该逼着
+ * `mastic ui` 去加载 key —— 光看界面本来是不需要 key 的。
+ */
+export function visionEnabled(): boolean {
+  const raw = optional("MASTIC_VISION")?.toLowerCase();
+  if (raw === undefined) return true;
+  return !["0", "false", "no", "off"].includes(raw);
 }
 
 function positiveInt(name: string, fallback: number): number {
@@ -61,6 +75,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     maxSteps: positiveInt("MASTIC_MAX_STEPS", 30),
     commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
     requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 120_000),
+    vision: visionEnabled(),
     ...overrides,
   };
 }

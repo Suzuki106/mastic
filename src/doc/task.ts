@@ -63,7 +63,8 @@ export interface StatementCheck {
 export type AcceptanceCheck = CommandCheck | StructuralCheck | StatementCheck;
 
 export interface TaskInput {
-  kind: "file" | "dir" | "url";
+  /** image 是用户在界面上传的图,路径相对 run 目录(attachments/ 下)。 */
+  kind: "file" | "dir" | "url" | "image";
   path?: string;
   url?: string;
   note?: string;
@@ -208,7 +209,7 @@ function parseInputs(raw: unknown[], errors: Problems): TaskInput[] {
       return [];
     }
 
-    const kind = readEnum(item, "kind", errors, ["file", "dir", "url"] as const);
+    const kind = readEnum(item, "kind", errors, ["file", "dir", "url", "image"] as const);
     if (kind === undefined) return [];
 
     const input: TaskInput = { kind };

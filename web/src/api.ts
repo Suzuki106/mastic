@@ -19,6 +19,13 @@ export type Acceptance =
   | { kind: "structural"; require: string[] }
   | { kind: "statement"; statement: string };
 
+export interface TaskInput {
+  kind: "file" | "dir" | "url" | "image";
+  path?: string;
+  url?: string;
+  note?: string;
+}
+
 export interface TaskData {
   id: string;
   title?: string;
@@ -27,6 +34,7 @@ export interface TaskData {
   deliverable?: string;
   acceptance?: Acceptance[];
   constraints?: string[];
+  inputs?: TaskInput[];
   budget?: { max_steps?: number };
 }
 
@@ -106,7 +114,7 @@ async function getJson<T>(url: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-export function fetchRuns(): Promise<{ runs: RunSummary[]; workspace: string }> {
+export function fetchRuns(): Promise<{ runs: RunSummary[]; workspace: string; vision: boolean }> {
   return getJson("/api/runs");
 }
 
@@ -114,11 +122,17 @@ export function fetchRun(runId: string): Promise<RunPayload> {
   return getJson(`/api/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function startRun(goal: string): Promise<{ runId: string }> {
+export interface AttachedImage {
+  name: string;
+  /** `data:image/png;base64,...` */
+  dataUrl: string;
+}
+
+export async function startRun(goal: string, images: AttachedImage[] = []): Promise<{ runId: string }> {
   const response = await fetch("/api/runs", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ goal }),
+    body: JSON.stringify({ goal, ...(images.length === 0 ? {} : { images }) }),
   });
   const payload = (await response.json()) as { runId?: string; error?: string };
   if (!response.ok || payload.runId === undefined) {

@@ -7,6 +7,7 @@ import {
   startRun,
   switchWorkspace,
   useEventStream,
+  type AttachedImage,
   type ReportData,
   type RunPayload,
   type RunSummary,
@@ -33,6 +34,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [workspace, setWorkspace] = useState<string>("");
   const [knownWorkspaces, setKnownWorkspaces] = useState<string[]>([]);
+  const [vision, setVision] = useState(false);
 
   const { events, live } = useEventStream(runId);
   const lastSeq = useRef(0);
@@ -40,12 +42,13 @@ export default function App() {
 
   const refreshRuns = useCallback(async (): Promise<void> => {
     try {
-      const [{ runs: list, workspace: dir }, spaces] = await Promise.all([
+      const [{ runs: list, workspace: dir, vision: canSee }, spaces] = await Promise.all([
         fetchRuns(),
         fetchWorkspaces(),
       ]);
       setRuns(list);
       setWorkspace(dir);
+      setVision(canSee);
       setKnownWorkspaces(spaces.known);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -171,11 +174,11 @@ export default function App() {
     return () => observer.disconnect();
   }, [tasks, view]);
 
-  const start = async (goal: string): Promise<void> => {
+  const start = async (goal: string, images: AttachedImage[]): Promise<void> => {
     setError(null);
     setBusy(true);
     try {
-      const { runId: created } = await startRun(goal);
+      const { runId: created } = await startRun(goal, images);
       setActive(null);
       setRunId(created);
       await refreshRuns();
@@ -285,12 +288,18 @@ export default function App() {
                   task={payload?.tasks.find((entry) => entry.doc?.data?.id === task.id)}
                   report={payload?.reports.find((entry) => entry.doc?.data?.task === task.id)}
                   view={view}
+                  runId={runId ?? ""}
                 />
               ))
             )}
           </div>
 
-          <Composer onSubmit={(goal) => void start(goal)} busy={isRunning} error={error} />
+          <Composer
+            onSubmit={(goal, images) => void start(goal, images)}
+            busy={isRunning}
+            error={error}
+            vision={vision}
+          />
         </section>
 
         <section className="min-h-0 border-l border-line">

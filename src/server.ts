@@ -1,10 +1,12 @@
 import { readdir, readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { loadConfig, type Config } from "./config.ts";
+import { MAX_IMAGES, parseDataUrl, type IncomingImage } from "./attachments.ts";
+import { loadConfig, visionEnabled, type Config } from "./config.ts";
 import { parseDoc } from "./doc/frontmatter.ts";
 import { readEvents, type RunEvent } from "./events.ts";
 import { orchestrate } from "./orchestrator.ts";
+import { resolveInside } from "./paths.ts";
 import { listRunIds, newRunId, readRunDoc, runPaths, type RunPaths, type RunDoc } from "./workspace.ts";
 import { loadWorkspaceRegistry, type WorkspaceRegistry } from "./workspaces.ts";
 
@@ -28,6 +30,12 @@ const MIME: Record<string, string> = {
   ".woff2": "font/woff2",
   ".json": "application/json; charset=utf-8",
   ".map": "application/json; charset=utf-8",
+  // 附图要能被浏览器直接画出来,类型得说对
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".gif": "image/gif",
 };
 
 /** 一次由界面发起的运行。跑完就留在表里,好让前端知道"它不在跑了"。 */
@@ -184,7 +192,7 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
     },
 
     /** 起一次运行。立刻返回 runId,活儿在后台跑。 */
-    start(goal: string): { runId: string } | { error: string } {
+    start(goal: string, images: IncomingImage[] = []): { runId: string } | { error: string } {
       // 只在真的要跑的时候才要 key —— 光看界面不需要
       try {
         config ??= loadConfig();
@@ -210,6 +218,7 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
         workspace: workspaces.current(),
         runId,
         signal: controller.signal,
+        ...(images.length === 0 ? {} : { images }),
       })
         .then((result) => {
           entry.finished = true;
@@ -260,7 +269,27 @@ async function route(
       const goal = typeof body.goal === "string" ? body.goal.trim() : "";
       if (goal === "") return json({ error: "要跑什么?goal 不能为空。" }, 400);
 
-      const result = runs.start(goal);
+      // 图片在这里就校验掉 —— 等运行起来了才发现图是坏的,用户已经白等一场
+      const raw = Array.isArray(body.images) ? body.images : [];
+      if (raw.length > MAX_IMAGES) return json({ error: `最多带 ${MAX_IMAGES} 张图。` }, 400);
+
+      const images: IncomingImage[] = [];
+      for (const [index, item] of raw.entries()) {
+        if (typeof item !== "object" || item === null) {
+          return json({ error: `第 ${index + 1} 张图格式不对。` }, 400);
+        }
+        const { dataUrl, name } = item as { dataUrl?: unknown; name?: unknown };
+        if (typeof dataUrl !== "string") {
+          return json({ error: `第 ${index + 1} 张图缺 dataUrl。` }, 400);
+        }
+        const parsed = parseDataUrl(dataUrl);
+        if ("error" in parsed) {
+          return json({ error: `第 ${index + 1} 张图:${parsed.error}` }, 400);
+        }
+        images.push({ dataUrl, ...(typeof name === "string" ? { name } : {}) });
+      }
+
+      const result = runs.start(goal, images);
       if ("error" in result) return json(result, 400);
       return json(result, 201);
     }
@@ -281,7 +310,22 @@ async function route(
       );
       // 工作区一并带回去:界面上得能看见"活儿到底在哪个目录里干",
       // 否则用户没法知道新文件会落在哪。
-      return json({ runs: docs.reverse(), workspace });
+      // 顺带把"这个模型收不收图"告诉界面 —— 不收就别显示上传按钮
+      return json({ runs: docs.reverse(), workspace, vision: visionEnabled() });
+    }
+
+    // 附图要能被界面显示出来 —— "当时那张图长什么样"是任务书的一部分
+    const attach = /^\/api\/runs\/([^/]+)\/attachments\/(.+)$/.exec(path);
+    if (attach?.[1] !== undefined && attach[2] !== undefined) {
+      try {
+        const root = runPaths(workspaces.current(), decodeURIComponent(attach[1])).root;
+        const file = resolveInside(root, join("attachments", decodeURIComponent(attach[2])));
+        return new Response(await readFile(file), {
+          headers: { "content-type": MIME[extname(file)] ?? "application/octet-stream" },
+        });
+      } catch {
+        return new Response("not found", { status: 404 });
+      }
     }
 
     const match = /^\/api\/runs\/([^/]+)(\/events|\/cancel)?$/.exec(path);

@@ -16,6 +16,7 @@ const config: Config = {
   maxSteps: 30,
   commandTimeoutMs: 1000,
   requestIdleTimeoutMs: 1000,
+  vision: true,
 };
 
 const toolContext: ToolContext = {
@@ -45,6 +46,13 @@ const endTool: Tool = {
     throw new Error("终止工具不该被真的执行");
   },
 };
+
+/** 消息内容现在是 string、内容块数组、或 assistant 那边的 null,断言前先拍平成文字。 */
+function textOf(message: Message): string {
+  const { content } = message;
+  if (content === null || typeof content === "string") return content ?? "";
+  return content.map((part) => (part.type === "text" ? part.text : "[图]")).join("");
+}
 
 function reply(text: string, calls: { name: string; args?: unknown }[] = []): ChatResult {
   return {
@@ -113,7 +121,7 @@ describe("工具循环", () => {
 
     assert.equal(result.status, "submitted");
     const fedBack = calls[1]?.find((message) => message.role === "tool");
-    assert.equal(fedBack && "content" in fedBack ? fedBack.content : "", "echo:hi");
+    assert.equal(fedBack === undefined ? "" : textOf(fedBack), "echo:hi");
   });
 
   it("交卷被打回时继续下一轮,而不是收下坏文档", async () => {
@@ -145,7 +153,7 @@ describe("工具循环", () => {
 
     assert.equal(result.status, "submitted");
     const nudged = calls[1]?.some(
-      (message) => message.role === "user" && message.content.includes("finish"),
+      (message) => message.role === "user" && textOf(message).includes("finish"),
     );
     assert.ok(nudged, "应当有一条提醒它交卷的消息");
   });
@@ -166,7 +174,7 @@ describe("工具循环", () => {
     assert.deepEqual(result.terminalArgs, { partial: true });
 
     const forced = calls.at(-1)?.some(
-      (message) => message.role === "user" && message.content.includes("步数已经用尽"),
+      (message) => message.role === "user" && textOf(message).includes("步数已经用尽"),
     );
     assert.ok(forced, "应当有一条要求交卷的消息");
     assert.ok(events.some((event) => event.detail.includes("要它交卷")));
@@ -226,6 +234,37 @@ describe("工具循环", () => {
       reply("", [{ name: "finish" }]),
     ]);
     assert.equal(result.status, "submitted");
+  });
+
+  // 图片是内容块数组形式发给接口的,得确认它原样传到了第一次请求上
+  it("带图的 user 消息按内容块发出去", async () => {
+    const { chat } = scripted([reply("", [{ name: "finish" }])]);
+    const calls: Message[][] = [];
+
+    await runToolLoop({
+      config,
+      system: "s",
+      user: [
+        { type: "text", text: "看这张图" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+      ],
+      tools: [echoTool, endTool],
+      toolContext,
+      terminalTool: "finish",
+      maxSteps: 5,
+      chat: async (_config, messages) => {
+        calls.push([...messages]);
+        return reply("", [{ name: "finish" }]);
+      },
+      onTerminal: () => undefined,
+    });
+
+    const sent = calls[0]?.find((message) => message.role === "user");
+    assert.ok(Array.isArray(sent?.content), "带图时应当是内容块数组");
+    assert.deepEqual(sent?.content, [
+      { type: "text", text: "看这张图" },
+      { type: "image_url", image_url: { url: "data:image/png;base64,AAAA" } },
+    ]);
   });
 
   it("用量逐轮累加", async () => {

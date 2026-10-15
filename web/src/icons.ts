@@ -18,6 +18,7 @@ import {
   FileText,
   FolderOpen,
   Hourglass,
+  ImagePlus,
   ListChecks,
   Loader,
   Minus,
@@ -49,3 +50,5 @@ export const RejectedDetailIcon = Minus;
 export const ArrowIcon = ChevronRight;
 export const EmptyIcon = Square;
 export const WorkspaceIcon = FolderOpen;
+export const AddImageIcon = ImagePlus;
+export const RemoveIcon = X;

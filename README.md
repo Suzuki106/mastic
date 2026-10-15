@@ -199,8 +199,34 @@ verdict:
 | 订阅事件流 | `GET /api/runs/:id/events`(SSE) |
 | 取消运行 | `POST /api/runs/:id/cancel` |
 | 看 / 切工作区 | `GET /api/workspaces` · `POST /api/workspace` `{path}` |
+| 取运行里的附图 | `GET /api/runs/:id/attachments/:name` |
 
 取消**只在任务边界生效** —— 不会打断正在跑的那个,免得在工作区里留下半截改动。
+
+### 带图
+
+输入框左边可以加图片(选择文件、拖进来、或**直接粘贴截图**),最多 4 张、每张 4MB。
+
+图片不是"发过去看一眼就没了" —— 它和任务书、报告一样**落在这次运行的目录里**:
+
+```
+.mastic/runs/<id>/attachments/1.png
+```
+
+planner 会把它写进任务书的 inputs:
+
+```yaml
+inputs:
+  - kind: image
+    path: attachments/1.png
+```
+
+于是两件事成立:**worker 知道要看哪张图**(只有被声明的图才会发过去,图片很贵,
+不该无条件塞给每个 worker),**事后翻回来也看得到当时那张图长什么样** ——
+任务书里那句"如果图里那个按钮是灰的"才有据可依。
+
+只用 PNG / JPEG / WebP / GIF。**SVG 一定进不来** —— 它能带脚本,放进 data URL
+再被浏览器渲染出来就是个 XSS 面。
 
 ### 工作区是可以切的
 
@@ -224,6 +250,7 @@ verdict:
 | `MASTIC_MAX_STEPS` | `30` | worker 单个任务最多几步 |
 | `MASTIC_COMMAND_TIMEOUT_MS` | `300000` | 验收命令超时 |
 | `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `120000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
+| `MASTIC_VISION` | `1` | 模型收不收图。设 0 时界面不显示上传入口 |
 
 ## 项目结构
 

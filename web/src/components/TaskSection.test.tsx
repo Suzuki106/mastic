@@ -36,7 +36,7 @@ function render(
   view: "report" | "task" = "report",
 ): string {
   return renderToStaticMarkup(
-    <TaskSection taskId="T-001" task={task} report={report} view={view} />,
+    <TaskSection taskId="T-001" task={task} report={report} view={view} runId="RUN-1" />,
   );
 }
 

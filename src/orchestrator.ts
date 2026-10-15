@@ -1,4 +1,5 @@
-import { plan } from "./agent/planner.ts";
+import { plan, type PlanImage } from "./agent/planner.ts";
+import { saveImage, type IncomingImage } from "./attachments.ts";
 import { verify } from "./agent/verifier.ts";
 import { work } from "./agent/worker.ts";
 import type { Config } from "./config.ts";
@@ -46,6 +47,8 @@ export interface OrchestrateOptions {
   runId?: string;
   /** 用户取消。在每个任务开跑前检查一次 —— 不打断正在跑的任务。 */
   signal?: AbortSignal;
+  /** 用户随需求一起传上来的图。会落盘到本次运行的 attachments/ 下。 */
+  images?: IncomingImage[];
   onEvent?: (event: RunEvent) => void;
 }
 
@@ -119,6 +122,7 @@ async function runTask(
       config: options.config,
       task,
       workspace: options.workspace,
+      runRoot: paths.root,
       timeoutMs: options.config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
       ...(findings === undefined ? {} : { findings }),
@@ -198,10 +202,31 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
 
   bus.emit({ kind: "run_start", detail: options.goal });
 
+  // 图片先落盘再规划:它们是这次运行的记录,任务书会引用这些路径,
+  // 事后翻回来得能看到当时那张图。
+  const images: PlanImage[] = [];
+  for (const [index, image] of (options.images ?? []).entries()) {
+    const saved = await saveImage(paths.root, index, image);
+    if ("error" in saved) {
+      bus.emit({ kind: "task_step", task: "planner", detail: `第 ${index + 1} 张图没能保存:${saved.error}` });
+      continue;
+    }
+    images.push({ path: saved.path, dataUrl: image.dataUrl });
+  }
+
+  if (images.length > 0) {
+    bus.emit({
+      kind: "task_step",
+      task: "planner",
+      detail: `带 ${images.length} 张附图:${images.map((image) => image.path).join("、")}`,
+    });
+  }
+
   const planned = await plan({
     config: options.config,
     goal: options.goal,
     workspace: options.workspace,
+    ...(images.length === 0 ? {} : { images }),
     timeoutMs: options.config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,

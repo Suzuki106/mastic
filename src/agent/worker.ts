@@ -1,3 +1,4 @@
+import { loadImages } from "../attachments.ts";
 import type { Config } from "../config.ts";
 import {
   parseReportDraft,
@@ -120,6 +121,8 @@ export interface WorkOptions {
   config: Config;
   task: TaskDoc;
   workspace: string;
+  /** 本次运行的目录。任务书里的图片路径相对它 —— 图片不在工作区里。 */
+  runRoot: string;
   timeoutMs: number;
   maxOutputChars: number;
   /** 上一轮 verifier 的结论。重试时才有。 */
@@ -218,12 +221,24 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
       : `\n\n## 上一轮为什么没通过\n\n${options.findings.map((line) => `- ${line}`).join("\n")}\n\n` +
         "带着这些去改。别重复上一轮的做法。";
 
+  // 任务书里声明为 image 的输入,在这里变成真正发给模型的图。
+  // 不声明的就不发 —— 图片很贵,不该无条件塞给每个 worker。
+  const imagePaths = options.task.inputs.flatMap((input) =>
+    input.kind === "image" && input.path !== undefined ? [input.path] : [],
+  );
+  const images = imagePaths.length === 0 ? [] : await loadImages(options.runRoot, imagePaths);
+
+  const brief =
+    `## 任务书\n\n${renderTaskDoc(options.task)}${retryNote}\n\n` +
+    (images.length === 0
+      ? ""
+      : `## 附图\n\n任务书里的 ${imagePaths.length} 张图已经附在这条消息上,直接看。\n\n`) +
+    `## 现在开始干活\n\n先读 acceptance 那条,再动手。`;
+
   const result = await runToolLoop({
     config: options.config,
     system: SYSTEM,
-    user:
-      `## 任务书\n\n${renderTaskDoc(options.task)}${retryNote}\n\n` +
-      `## 现在开始干活\n\n先读 acceptance 那条,再动手。`,
+    user: images.length === 0 ? brief : [{ type: "text" as const, text: brief }, ...images],
     tools: [...workerTools, REPORT_TOOL],
     toolContext,
     terminalTool: "submit_report",
