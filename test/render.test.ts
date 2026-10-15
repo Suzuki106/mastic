@@ -89,6 +89,24 @@ describe("渲染交付报告", () => {
     assert.ok(out.includes("✓") && out.includes("✗"));
   });
 
+  // 漂移过的证据不该画成 ✗ —— 它退出码是对上的,画叉会像是没验过
+  it("带 caveat 的判据画 ⚠ 而不是 ✗", () => {
+    const data = payload("verified");
+    const checks = (data.reports[0]?.doc.data as { verdict: { checks: unknown[] } }).verdict.checks;
+    checks.push({ kind: "evidence", label: "证据 `npm test`", passed: true, caveat: true, detail: "输出不是逐字节可复现的" });
+
+    state.run = data.run;
+    state.tasks = data.tasks;
+    state.reports = data.reports;
+    state.selected = "T-001";
+    state.view = "report";
+    renderDoc();
+
+    const out = (dom.find("doc") as FakeElement).serialise();
+    assert.ok(out.includes("⚠"), "应当有 ⚠ 标记");
+    assert.ok(out.includes('class="caveat"'), "应当带 caveat 类");
+  });
+
   it("主张带着证据哈希一起显示", () => {
     const out = render();
     assert.ok(out.includes("测试全过"));

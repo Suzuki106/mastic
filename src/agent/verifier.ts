@@ -182,11 +182,14 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
             : evidence.kind === "file"
               ? `证据 \`${evidence.path}\``
               : `证据 \`${evidence.url}\``;
+      // drifted 记为"过,但附一句" —— 退出码重放上了,结论站得住,
+      // 只是那份抄件不逐字节可复现。它不该被画成 ✗,那会像是没验过。
       return {
         kind: "evidence" as const,
         label,
-        passed: outcome.verdict === "replayed",
+        passed: outcome.verdict === "replayed" || outcome.verdict === "drifted",
         detail: outcome.detail,
+        ...(outcome.verdict === "drifted" ? { caveat: true } : {}),
       };
     }),
     ...statementVerdicts.map((item) => ({

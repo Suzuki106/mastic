@@ -270,16 +270,21 @@ function renderVerdict(reportData) {
   const verdict = reportData.verdict;
   if (!verdict) return '<p class="empty">还没裁定。</p>';
 
+  // 三态:过了 / 过了但有话要说 / 没过。中间那档画 ⚠ 而不是 ✗ ——
+  // 退出码重放上了就是验过了,只是那份抄件不逐字节可复现。
   const checks = (verdict.checks ?? [])
-    .map(
-      (check) =>
-        `<li class="${check.passed ? "pass" : "fail"}">` +
-        `<span class="mark">${check.passed ? "✓" : "✗"}</span>` +
+    .map((check) => {
+      const state = check.caveat ? "caveat" : check.passed ? "pass" : "fail";
+      const mark = state === "caveat" ? "⚠" : state === "pass" ? "✓" : "✗";
+      return (
+        `<li class="${state}">` +
+        `<span class="mark">${mark}</span>` +
         `<span class="check-label">${escapeHtml(check.label)}</span>` +
         `<span class="tag">${escapeHtml(check.kind)}</span>` +
         `<div class="check-detail">${escapeHtml(check.detail)}</div>` +
-        `</li>`,
-    )
+        `</li>`
+      );
+    })
     .join("");
 
   const reasons = (verdict.reasons ?? [])

@@ -341,8 +341,16 @@ body {
   color: var(--verified);
 }
 
+.checks li.caveat .mark {
+  color: var(--unverified);
+}
+
 .checks li.fail .mark {
   color: var(--contradicted);
+}
+
+.checks li.caveat .check-detail {
+  color: var(--unverified);
 }
 
 .check-label {

@@ -53,14 +53,17 @@ describe("定状态", () => {
     assert.equal(verdict.status, "contradicted");
   });
 
-  it("输出漂移只是软伤 → unverified,而不是指控 worker 说谎", () => {
+  // 退出码重放上了,说明这条命令的结果确实如此;只是那份抄件不逐字节可复现。
+  // 那是抄件的性质,不是结论的可信度问题 —— 所以不降级。
+  // 曾经判 unverified,后果是靠测试命令验收的任务永远拿不到 verified。
+  it("输出漂移不降级 —— 否则 verified 永远不可达", () => {
     const verdict = decideStatus(
       base({
         commandOutcomes: [passingCommand],
         replayOutcomes: [{ ...replayed, verdict: "drifted", detail: "输出不是逐字节可复现" }],
       }),
     );
-    assert.equal(verdict.status, "unverified");
+    assert.equal(verdict.status, "verified");
   });
 
   it("URL 证据不可重放 → unverified", () => {
@@ -73,12 +76,16 @@ describe("定状态", () => {
     assert.equal(verdict.status, "unverified");
   });
 
-  it("有未解决项,但任务没要求清干净 → unverified(合法终态)", () => {
+  // 这条是被真实运行纠正过来的:一个 14 条判据全过、却老实交代了 4 条方法边界
+  // 的 worker,原先被判 unverified —— 系统惩罚了它最想要的行为。
+  // 现在验收就是"完成"的定义,披露不改状态。
+  it("未解决项只是披露,不改状态 —— 不能惩罚老实交代", () => {
     const verdict = decideStatus(
       base({ commandOutcomes: [passingCommand], replayOutcomes: [replayed], unresolved: ["并发没验"] }),
     );
-    assert.equal(verdict.status, "unverified");
+    assert.equal(verdict.status, "verified");
   });
+
 
   it("任务要求 no_unresolved 时,留尾巴就是硬伤", () => {
     const verdict = decideStatus(

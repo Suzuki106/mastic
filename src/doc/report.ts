@@ -71,12 +71,18 @@ export interface FileChange {
   action: FileAction;
 }
 
-/** 一条判据的结论。前端就是靠这个逐条渲染 pass/fail 的。 */
+/**
+ * 一条判据的结论。前端就是靠这个逐条渲染的。
+ *
+ * `caveat` 是给"过了、但有话要说"用的 —— 典型是证据退出码对上了、
+ * 输出却不是逐字节可复现。它不改状态,只是让人看见。
+ */
 export interface CheckReport {
   kind: "command" | "evidence" | "statement" | "lint";
   label: string;
   passed: boolean;
   detail: string;
+  caveat?: boolean;
 }
 
 /** 裁定留痕:谁在什么时候、依据什么、把状态定成了什么。 */
@@ -259,14 +265,14 @@ function parseVerdict(raw: unknown): VerdictReport | undefined {
         if (kind !== "command" && kind !== "evidence" && kind !== "statement" && kind !== "lint") {
           return [];
         }
-        return [
-          {
-            kind,
-            label: typeof item.label === "string" ? item.label : "",
-            passed: item.passed === true,
-            detail: typeof item.detail === "string" ? item.detail : "",
-          },
-        ];
+        const check: CheckReport = {
+          kind,
+          label: typeof item.label === "string" ? item.label : "",
+          passed: item.passed === true,
+          detail: typeof item.detail === "string" ? item.detail : "",
+        };
+        if (item.caveat === true) check.caveat = true;
+        return [check];
       })
     : [];
 
