@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { runToolLoop, type ChatFn, type LoopEvent } from "../src/agent/loop.ts";
+import { excerpt, runToolLoop, type ChatFn, type LoopEvent } from "../src/agent/loop.ts";
 import type { Config } from "../src/config.ts";
 import type { ChatResult, Message } from "../src/llm.ts";
 import { createLedger } from "../src/ledger.ts";
@@ -105,6 +105,44 @@ async function run(
 
   return { result, calls, events };
 }
+
+/**
+ * 这一组是被真实日志逼出来的。原先按字符数 slice,于是推理摘录长这样:
+ *
+ *   "t .mastic. So this is a greenfield project..."
+ *   "wn lightweight task? Adding an 11th task for docs..."
+ *
+ * 截断本身没问题,从半个词开始才叫乱。
+ */
+describe("推理摘录", () => {
+  it("短文本原样返回,不加省略号", () => {
+    assert.equal(excerpt("Let me look around."), "Let me look around.");
+  });
+
+  it("长文本以省略号开头,表明是摘录", () => {
+    const long = `${"First sentence here. ".repeat(20)}This is the tail we want to keep reading.`;
+    assert.ok(excerpt(long).startsWith("…"));
+  });
+
+  it("不从半个词开始 —— 摘录必须是原文里的一段连续子串", () => {
+    const long = `${"word ".repeat(80)}therefore the answer is forty two`;
+    const cut = excerpt(long, 60).slice(1); // 去掉开头的省略号
+
+    assert.ok(long.includes(cut), "摘录应当是原文的一段连续子串");
+    assert.ok(!cut.startsWith("ord "), "不该从半个词开始");
+    assert.ok(cut.endsWith("forty two"));
+  });
+
+  it("能对齐到句末标点", () => {
+    const cut = excerpt(`${"a".repeat(200)}。后半句是我们想看的完整内容。`, 40);
+    assert.ok(cut.startsWith("…"));
+    assert.ok(!cut.includes("aaaaa"), "不该拖着一长串前文");
+  });
+
+  it("换行和多余空白会被压平 —— 日志是一行一条", () => {
+    assert.equal(excerpt("a\n\n  b   c"), "a b c");
+  });
+});
 
 describe("工具循环", () => {
   it("交卷即结束,并把参数带出来", async () => {

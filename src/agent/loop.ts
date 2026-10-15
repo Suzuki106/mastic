@@ -79,6 +79,39 @@ function signatureOf(calls: { function: { name: string; arguments: string } }[])
   return calls.map((call) => `${call.function.name}(${call.function.arguments})`).join(" | ");
 }
 
+/**
+ * 取推理的末尾一段,**对齐到读得通的地方**。
+ *
+ * 直接按字符数 slice 会从半个词开始 —— "t .mastic"、"wn lightweight task"
+ * 这种。截断本身没问题,截在词中间才叫乱。所以先退到句末标点,再退到词边界,
+ * 并且明确加个省略号表示这是摘录。
+ */
+export function excerpt(text: string, limit = 160): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  if (flat.length <= limit) return flat;
+
+  // 多取一倍,好让切点有地方落 —— 只取 limit 的话,句末标点往往正好落在
+  // 窗口之外,那就只能从半个词开始切。
+  const window = flat.slice(-(limit * 2));
+
+  // 从窗口里**第一个**句末标点之后开始:剩下的就都是完整句子。
+  // 用最后一个的话,前面会拖着一长串没头没尾的前文。
+  const boundary = window.search(/[。.!?;；]\s*/);
+  let cut = boundary === -1 ? window.slice(-limit) : window.slice(boundary + 1);
+
+  if (cut.length > limit) cut = cut.slice(cut.length - limit);
+
+  // 再退到词边界 —— 中文没有空格,这一步只对西文有意义
+  const space = cut.indexOf(" ");
+  if (space !== -1 && space < 24) cut = cut.slice(space + 1);
+
+  const trimmed = cut.trim();
+  return trimmed === "" ? `…${flat.slice(-limit)}` : `…${trimmed}`;
+}
+
+/** 推理太短就先别报 —— 推一句"Let"出去毫无意义。 */
+const MIN_EXCERPT = 40;
+
 function preview(text: string, limit = 300): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
@@ -138,7 +171,9 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     // "它还活着"该由界面上一颗走动的秒表来表达,而不是靠往日志里灌几十条
     // 几乎一样的记录。那样只会把真正发生的事淹掉。
     let reasoning = "";
-    let lastPing = 0;
+    // 从"请求发出的那一刻"起算。写成 0 的话第一个推理片断一到就会立刻推送 ——
+    // 推出去的是刚吐出来的头三个字符。
+    let lastPing = Date.now();
     options.onEvent?.({ kind: "thinking", detail: "正在请求模型…" });
 
     const { reply, toolCalls, usage: turnUsage } = await chat(options.config, messages, {
@@ -151,19 +186,14 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
         // 所以用户看到的是一行不停更新的思路,日志里也不会堆出几十条重复记录。
         const now = Date.now();
         if (now - lastPing < 8000) return;
+        if (reasoning.trim().length < MIN_EXCERPT) return;
         lastPing = now;
-        options.onEvent?.({
-          kind: "thinking",
-          detail: reasoning.replace(/\s+/g, " ").trim().slice(-150),
-        });
+        options.onEvent?.({ kind: "thinking", detail: excerpt(reasoning) });
       },
     });
 
-    if (reasoning.trim() !== "") {
-      options.onEvent?.({
-        kind: "thinking",
-        detail: `想完了:${reasoning.replace(/\s+/g, " ").trim().slice(-160)}`,
-      });
+    if (reasoning.trim().length >= MIN_EXCERPT) {
+      options.onEvent?.({ kind: "thinking", detail: `想完了 ${excerpt(reasoning)}` });
     }
     usage = addUsage(usage, turnUsage);
 
