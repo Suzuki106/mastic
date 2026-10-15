@@ -67,21 +67,31 @@ blocked       走不下去(缺输入 / 需要人拍板)
 
 ## 快速开始
 
-需要 Node ≥ 23.6(直接跑 `.ts`,无需编译)。
+需要 Node ≥ 23.6。后端直接跑 `.ts`(Node 原生擦除类型,不经编译);
+前端走 Vite,`npm install` 时会自动构建一次。
 
 ```bash
 git clone https://github.com/Suzuki106/mastic.git
 cd mastic
-npm install
+npm install               # 装依赖,并顺手把前端构建好(约 0.3s)
 
 cp .env.example .env      # 填一个 OpenAI 兼容接口的 key(默认 DeepSeek)
 vim .env
+```
 
-npm run mastic -- run "把 README 里的 TODO 都补上"
+然后两种用法,任选:
+
+```bash
+npm run mastic -- ui      # 图形界面:在界面里写需求、看它跑
+
+npm run mastic -- run "把 README 里的 TODO 都补上"    # 命令行
 ```
 
 任何兼容 `POST /chat/completions` 的服务都能用 —— OpenAI、DeepSeek、月之暗面、
 本地 Ollama,改 `.env` 里的 `OPENAI_BASE_URL` 即可。
+
+前端改完要重新构建:`npm run build:web`。开发时用 `npm run dev:web`
+(带热更新,并把 `/api` 代理到 7777 上的 `mastic ui`)。
 
 ## 命令
 
@@ -159,14 +169,36 @@ verdict:
 
 ## Web 界面
 
-`mastic ui` 起一个本地服务(默认 <http://127.0.0.1:7777>),三块:
+`mastic ui` 起一个本地服务(默认 <http://127.0.0.1:7777>)。**命令行能做的,
+界面里都能做** —— 不用回到终端。
 
-- **左**:任务 DAG,节点按状态着色(已验证 / 未验全 / 对不上 / 卡住)
-- **中**:选中任务的文档 —— 裁定逐条 pass/fail、主张与证据、正文
-- **右**:实时事件流。`mastic run` 和 `mastic ui` 是两个进程,
-  前端直接 tail `events.jsonl`,所以**一边跑一边看**是能用的
+- **底部输入框**:写下要做的事,回车。planner 拆完任务树,节点就一个一个出现在左边。
+- **左**:任务图谱。互不依赖的任务横排在同一列(它们是真的在并行跑),
+  依赖关系连成线。节点按状态着色。
+- **中**:选中任务的文档。两个 tab —— 交付报告 / 任务书。报告页上裁定**逐条**
+  列出来,三态各有各的标记:通过、通过但附一句、没通过。
+- **右**:实时事件流,SSE 推过来的,一条一条往上长。
 
-因为文档 schema 是严格的,前端解析不需要任何启发式。
+**它不会整屏刷新。** 新事件是追加到列表尾部的,已经画好的那些原地不动;
+任务节点在第一次出现时播一次入场动画,之后只是换颜色。
+用户往上翻历史时,自动跟随会停住,不会被拽回底部。
+
+所以你可以开着界面跑,同时干别的 —— 它会一直往下长。
+
+因为文档 schema 是严格的,前端解析不需要任何启发式:状态、判据、证据
+都是 frontmatter 里的字段,不是从正文里猜出来的。
+
+### 界面能发起的操作
+
+| 操作 | 接口 |
+| --- | --- |
+| 新建运行 | `POST /api/runs` `{goal}` → `{runId}` |
+| 列出运行 | `GET /api/runs` |
+| 取一次运行的文档 | `GET /api/runs/:id` |
+| 订阅事件流 | `GET /api/runs/:id/events`(SSE) |
+| 取消运行 | `POST /api/runs/:id/cancel` |
+
+取消**只在任务边界生效** —— 不会打断正在跑的那个,免得在工作区里留下半截改动。
 
 ## 配置
 
@@ -191,7 +223,7 @@ src/
   cli.ts            命令入口
   orchestrator.ts   调度:分层、并行、带 findings 重派
   inspect.ts        check / verify 两个只读命令
-  server.ts         HTTP:静态前端 + REST + SSE
+  server.ts         HTTP:静态产物 + REST + SSE + 从界面发起运行
   agent/            只有这三处调模型
     loop.ts         工具循环(交卷工具 + 校验打回)
     planner.ts      目标 → 任务树
@@ -216,24 +248,49 @@ src/
   workspace.ts      落盘布局
   events.ts         只追加的事件流
   paths.ts          路径钉在工作目录内
-  web/              前端(index.html / app.js / style.css,无构建)
-test/               用例全部离线,不需要 API key
+
+web/                前端(Vite + React,独立于后端那条"直接跑 .ts"的链子)
+  src/
+    App.tsx         三栏布局、运行状态、发起新运行
+    api.ts          服务端形状的类型 + SSE 订阅
+    icons.ts        图标的唯一出处(语义名,不直接 import 图标库)
+    lib/
+      markdown.tsx  Markdown → React 节点(不生成 HTML 字符串)
+      graph.ts      任务树分层(界面用)
+      status.ts     状态词汇表:颜色和图标只有一个出处
+    components/
+      TaskGraph.tsx    React Flow 任务图谱
+      DocumentView.tsx 任务书 / 交付报告
+      EventStream.tsx  实时事件流
+      Composer.tsx     输入需求的框
+  dist/             构建产物(npm install 时自动生成,不入库)
+
+test/               后端用例:node --test,全部离线
 ```
+
+**后端和前端用的是两条不同的链子。** 后端靠 Node 直接擦除类型跑 `.ts`,
+不沾任何构建工具 —— 这是刻意的,它保证了 `mastic` 在最朴素的环境里也能跑。
+前端要 JSX,只能交给 Vite。两条链子各测各的,互不牵连。
 
 ## 测试
 
 ```bash
-npm test          # node --test,全部离线
-npm run typecheck # tsc --noEmit
+npm test               # 后端(node --test)+ 前端(vitest),全部离线
+npm run test:core      # 只跑后端
+npm run test:web       # 只跑前端
+npm run typecheck      # tsc,两个项目都查
 ```
 
 覆盖的是**不需要 API key 的那部分** —— 也就是真正承载项目主张的那部分:
 
 - 文档 schema:没证据的 claim 收不下、空判据的验收收不下、越界路径挡得住
 - 证据重放:**编造的哈希判 contradicted**,而带时间戳的老实证据只判 drifted
+- 工具循环:交卷打回、卡住判定、**步数用尽强制交卷**
 - 禁词 lint:中文英文都抓得到,`allow_terms` 是唯一出口,引用不算主张
-- 裁定:九种组合,含"worker 主动喊停 → blocked,即使别的都过了"
-- 前端:渲染真实 payload 不炸、先转义再上标记、DAG 分层正确
+- 裁定:含"worker 主动喊停 → blocked,即使别的都过了"
+- 并发闸门:同时最多跑 limit 个、某个抛错不会被吞掉
+- 前端:Markdown 渲染**不生成 HTML 字符串**(XSS 在结构上不成立)、
+  裁定三态各有各的颜色、任务树分层正确
 
 ## 设计取舍
 
@@ -273,8 +330,23 @@ npm run typecheck # tsc --noEmit
 **为什么禁词表里没有 TODO / FIXME。** 那不是"在编",是"没写完"。
 而且 `node --test` 的输出里天然有一行 `ℹ todo 0`,放进禁词表必然误伤每一份老实报告。
 
-**为什么前端没有构建步骤。** 浏览器直接加载 `src/web/` 下的三个文件。
-少一层工具链,少一处会过期的东西。
+**前端为什么最后还是上了构建步骤。** 第一版是没有的:三个文件,浏览器直接
+加载,靠一个手写的 DOM 替身来测。那套确实轻,但它有个看得见的代价 ——
+**图形那块全是手搓的**:分层是自己算的,连线是自己画的贝塞尔曲线,
+样式是一条一条 CSS。做到第三个面板时,时间花在重造轮子上而不是界面上。
+
+换到 Vite + React + React Flow 之后,任务图谱那部分反而**代码更少**,
+而且拿回了缩放、拖拽、自动布局。代价是诚实的:多了构建链、
+前端测试要换一套跑法、`npm install` 慢了一点(约 0.3 秒)。
+
+后端那条"直接跑 `.ts`、不沾构建工具"的链子没有动 —— 那个性质值得保,
+因为它保证了 `mastic` 在最朴素的环境里也能跑起来。
+
+**为什么图标不直接 import 图标库。** 所有图标都从 `web/src/icons.ts` 出,
+而且用的是**语义名**(`CheckCaveatIcon` 而不是 `AlertTriangle`)。
+组件里说的是"这里要表示'通过了但有话要说'",不是"这里要一个三角形"。
+换整套图标只改这一个文件。另外:不用 emoji 和 `✓ ✗` 这类字符当图标 ——
+它们在不同平台的字形、基线、颜色都不一样,凑在一起很脏。
 
 ## 许可
 

@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+
+    // 前端由 Vite 打包,不像后端那样靠 Node 直接擦除类型,
+    // 所以这里不需要 erasableSyntaxOnly / allowImportingTsExtensions。
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["src"]
+}

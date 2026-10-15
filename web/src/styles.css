@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+/*
+ * 主题:纯白。底色是白的,分隔靠极浅的灰线,不靠色块 ——
+ * 满屏深色卡片会让"哪块是重点"看不出来。
+ */
+@theme {
+  --color-surface: #ffffff;
+  --color-panel: #ffffff;
+  --color-line: #e8ecf1;
+  --color-line-strong: #d6dce4;
+  --color-ink: #0f172a;
+  --color-muted: #64748b;
+  --color-faint: #94a3b8;
+
+  /* 状态色。都是按白底可读性挑的,不是深色主题那套直接拿来用 */
+  --color-verified: #1a7f37;
+  --color-unverified: #9a6700;
+  --color-contradicted: #cf222e;
+  --color-blocked: #8250df;
+  --color-running: #0969da;
+  --color-idle: #6e7781;
+
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+
+  /* 动效都在这儿登记,组件里直接用 animate-* 工具类 */
+  --animate-rise: rise 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-pop: pop 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+  --animate-fade: fade 0.2s ease-out;
+  --animate-breathe: breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes pop {
+  from {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: 14px/1.6 system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 滚动条压细一点,不然白色底上很抢眼 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+
+/* React Flow:按白底调 */
+.react-flow__attribution {
+  background: transparent;
+  color: var(--color-faint);
+  font-size: 10px;
+}
+.react-flow__edge-path {
+  stroke: var(--color-line-strong);
+  stroke-width: 1.5;
+}
+.react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.react-flow__controls-button {
+  background: #fff;
+  border-color: var(--color-line);
+  color: var(--color-muted);
+  fill: var(--color-muted);
+}
+.react-flow__controls-button:hover {
+  background: #f8fafc;
+}
+.react-flow__node {
+  cursor: pointer;
+}

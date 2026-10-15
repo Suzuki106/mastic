@@ -37,6 +37,15 @@ export interface OrchestrateOptions {
   workspace: string;
   /** 每个任务最多拆成几步 —— planner 自己的预算。 */
   planSteps?: number;
+  /**
+   * 由调用方指定 run id。
+   *
+   * Web 界面需要**先**拿到 id 才能把地址切过去、才能订阅事件流,
+   * 所以它自己生成 id 传进来,而不是等这里返回。
+   */
+  runId?: string;
+  /** 用户取消。在每个任务开跑前检查一次 —— 不打断正在跑的任务。 */
+  signal?: AbortSignal;
   onEvent?: (event: RunEvent) => void;
 }
 
@@ -170,7 +179,7 @@ async function runTask(
 }
 
 export async function orchestrate(options: OrchestrateOptions): Promise<OrchestrateResult> {
-  const runId = newRunId();
+  const runId = options.runId ?? newRunId();
   const paths = await createRun(options.workspace, runId);
   const bus = createEventBus(paths, runId);
   if (options.onEvent !== undefined) bus.subscribe(options.onEvent);
@@ -228,6 +237,22 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
   const outcomes = new Map<string, TaskOutcome>();
 
   for (const layer of layers) {
+    // 取消只在任务边界生效 —— 不打断正在跑的那个,免得留下半截工作区
+    if (options.signal?.aborted === true) {
+      for (const task of planned.tasks) {
+        if (outcomes.has(task.id)) continue;
+        outcomes.set(task.id, {
+          task,
+          status: "skipped",
+          attempts: 0,
+          failure: "用户取消了这次运行。",
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        });
+      }
+      bus.emit({ kind: "run_done", detail: "已取消" });
+      break;
+    }
+
     const runnable: TaskDoc[] = [];
 
     for (const task of layer) {

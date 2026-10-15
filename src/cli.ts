@@ -212,22 +212,24 @@ async function main(): Promise<void> {
     return;
   }
 
-  // ui 只是把磁盘上的文档读出来给人看,同样不需要 API key
+  // ui 本身不碰模型 —— 光看界面不需要 key,只有从界面上发起运行才需要
   if (command === "ui") {
     const workspace = flags.workspace ?? process.cwd();
     const requested = positional[0] ?? (await latestRunId(workspace));
-    if (requested === undefined) {
-      console.error("还没有任何运行。先跑一次:mastic run \"<目标>\"");
-      process.exitCode = 1;
-      return;
-    }
 
-    const server = await startServer({ workspace, runId: requested, port: flags.port ?? 7777 });
+    const server = await startServer({
+      workspace,
+      ...(requested === undefined ? {} : { runId: requested }),
+      port: flags.port ?? 7777,
+    });
 
     console.log(`mastic ui   ${server.url}`);
-    console.log(`运行        ${requested}`);
     console.log(`工作区      ${workspace}`);
-    console.log(`\n跑着的 mastic run 会自动出现在事件流里。Ctrl-C 退出。`);
+    console.log(
+      requested === undefined
+        ? `\n还没有任何运行 —— 打开界面直接新建一个就行。Ctrl-C 退出。`
+        : `\n当前运行    ${requested}\n\n界面里也能新建运行;跑着的 mastic run 会自动出现在事件流里。Ctrl-C 退出。`,
+    );
     return;
   }
 
