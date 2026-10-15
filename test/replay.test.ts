@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -101,5 +101,37 @@ describe("证据重放", () => {
       sha256: FAKE_HASH,
     });
     assert.equal(verdict, "contradicted");
+  });
+
+  /**
+   * 已知边界,不是 bug 而是说不清:命令现在稳定、记录却对不上时,
+   * "工作区变了"和"这个数是编的"在重放这一侧无法区分。
+   *
+   * 真实跑出来过 —— worker 记了 `ls -R src`,然后自己往 src 下建了文件,
+   * 重放自然对不上。裁定仍然拦下它(这条证据确实不能作数),但措辞不能
+   * 指控说谎。
+   */
+  it("记录之后工作区变了:照样拦下,但措辞不说'编的'", async () => {
+    const before = await runCommand("ls", { cwd: workspace, timeoutMs });
+    await writeFile(join(workspace, "后来加的文件.txt"), "x", "utf8");
+
+    const outcomes = await replayEvidence(
+      reportWith([
+        {
+          kind: "command",
+          run: "ls",
+          cwd: ".",
+          exit_code: before.exitCode,
+          stdout_sha256: before.stdoutSha256,
+        },
+      ]),
+      { workspace, timeoutMs },
+    );
+
+    const outcome = outcomes[0];
+    assert.equal(outcome?.verdict, "contradicted");
+    // 它两次新跑是一致的,所以确实是"稳定但与记录不符"那一档
+    assert.ok(outcome?.detail.includes("分不清是哪种"), `措辞应当承认分不清,实际:${outcome?.detail}`);
+    assert.ok(!outcome?.detail.includes("报告里那个数是编的"), "不该断言就是说谎");
   });
 });
