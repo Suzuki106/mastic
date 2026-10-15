@@ -3,6 +3,7 @@ import type { RunEvent } from "./events.ts";
 import { checkWorkspace, reverify } from "./inspect.ts";
 import { orchestrate, type TaskOutcome } from "./orchestrator.ts";
 import { displayPath } from "./paths.ts";
+import { resumeRun } from "./resume.ts";
 import { startServer } from "./server.ts";
 import { latestRunId } from "./workspace.ts";
 
@@ -11,6 +12,8 @@ const HELP = `mastic —— 文档驱动的多 agent
 用法:
   mastic run "<目标>"        把目标拆成任务树,并行跑,逐任务验收
   mastic ui [run-id]         打开 Web 界面(默认最近一次运行)
+  mastic resume [run-id] [任务号…]
+                             续跑没做完的任务(不重新规划,沿用现成任务书)
   mastic verify [run-id]     对已有运行重跑一遍验收(证据重放 + 验收命令)
   mastic check [run-id]      只校验文档合不合规,不跑命令、不碰模型(可进 CI)
   mastic help
@@ -177,7 +180,13 @@ async function main(): Promise<void> {
 
   // 先把"命令认不认识、参数够不够"问清楚,再去碰配置 ——
   // 否则打错一个字,收到的却是"缺少 OPENAI_API_KEY",完全指错方向。
-  if (command !== "check" && command !== "ui" && command !== "run" && command !== "verify") {
+  if (
+    command !== "check" &&
+    command !== "ui" &&
+    command !== "run" &&
+    command !== "verify" &&
+    command !== "resume"
+  ) {
     console.log(`还不认识 \`${command}\`。\n`);
     console.log(HELP);
     return;
@@ -234,6 +243,39 @@ async function main(): Promise<void> {
   }
 
   const config = loadConfig(overridesFrom(flags));
+
+  if (command === "resume") {
+    const runId = positional[0] ?? (await latestRunId(config.workspace));
+    if (runId === undefined) {
+      console.error("还没有任何运行,没什么可续的。");
+      process.exitCode = 1;
+      return;
+    }
+
+    // 后面跟的任务号是要补哪几个;不跟就是"所有还没报告的"
+    const taskIds = positional.slice(1);
+    console.log(
+      taskIds.length > 0 ? `续跑 ${runId} 的 ${taskIds.join("、")}\n` : `续跑 ${runId} 里还没完成的任务\n`,
+    );
+
+    const outcomes = await resumeRun(config, config.workspace, runId, taskIds, (event) =>
+      printEvent({ seq: 0, at: new Date().toISOString(), run: runId, ...event } as RunEvent, flags.quiet),
+    );
+
+    if (outcomes.length === 0) {
+      console.log("没有需要补的任务。");
+      return;
+    }
+
+    console.log("\n─── 续跑结果 ───");
+    for (const outcome of outcomes) {
+      console.log(`${paint(outcome.status.padEnd(12))} ${outcome.taskId}  ${outcome.reasons[0] ?? outcome.failure ?? ""}`);
+    }
+
+    const bad = outcomes.filter((o) => o.status !== "verified" && o.status !== "unverified");
+    if (bad.length > 0) process.exitCode = 1;
+    return;
+  }
 
   if (command === "verify") {
     const runId = positional[0] ?? (await latestRunId(config.workspace));
