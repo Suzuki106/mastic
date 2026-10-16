@@ -259,7 +259,7 @@ async function main(): Promise<void> {
     );
 
     const outcomes = await resumeRun(config, config.workspace, runId, taskIds, (event) =>
-      printEvent({ seq: 0, at: new Date().toISOString(), run: runId, ...event } as RunEvent, flags.quiet),
+      printEvent(event, flags.quiet),
     );
 
     if (outcomes.length === 0) {
