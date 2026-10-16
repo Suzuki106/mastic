@@ -47,6 +47,7 @@ export const STRUCTURAL_RULES = [
   "no_unresolved",
   "deliverable_matches_task",
   "experiment_inputs_traceable",
+  "data_dir_untouched",
 ] as const;
 export type StructuralRule = (typeof STRUCTURAL_RULES)[number];
 

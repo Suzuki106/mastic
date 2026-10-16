@@ -350,3 +350,39 @@ export function addedOrChanged(
 
   return outputs;
 }
+
+/** 原始数据区。相对工作区。 */
+export const DATA_DIR = "data";
+
+/** 路径(相对工作区)是不是落在原始数据区里。 */
+export function isUnderDataDir(path: string): boolean {
+  const normalized = path.replace(/^\.\//, "").replace(/\\/g, "/");
+  return normalized === DATA_DIR || normalized.startsWith(`${DATA_DIR}/`);
+}
+
+/** 列出一个目录下所有文件的相对路径(任意扩展名)。 */
+export async function listFiles(root: string): Promise<string[]> {
+  const found: string[] = [];
+
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        await walk(join(dir, entry.name), relative);
+        continue;
+      }
+      if (entry.isFile()) found.push(relative);
+    }
+  };
+
+  await walk(root, "");
+  return found.sort();
+}

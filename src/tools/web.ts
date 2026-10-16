@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
-import { appendProvenance, readProvenance } from "../provenance.ts";
+import { appendProvenance, DATA_DIR, readProvenance } from "../provenance.ts";
 import { resolveInside } from "../paths.ts";
 import type { Tool, ToolContext } from "./index.ts";
 
@@ -148,10 +148,12 @@ const fetchUrlTool: Tool = {
     ).length;
 
     const wanted = typeof args.name === "string" && /^[\w.-]{1,60}$/.test(args.name) ? args.name : undefined;
-    const relative = join("fetched", wanted ?? slugOf(response.url, index + 1));
-    const target = resolveInside(ctx.runRoot, relative);
+    // 原始数据统一落在工作区的 data/ 下 —— 那是"这一份是外部数据"的物理位置。
+    // 相对路径按工作区算,因为它是给人看的、也是给后续任务引用的。
+    const relative = join(DATA_DIR, wanted ?? slugOf(response.url, index + 1));
+    const target = resolveInside(ctx.workspace, relative);
 
-    await mkdir(join(ctx.runRoot, "fetched"), { recursive: true });
+    await mkdir(join(ctx.workspace, DATA_DIR), { recursive: true });
     await writeFile(target, buffer);
 
     const sha256 = createHash("sha256").update(buffer).digest("hex");

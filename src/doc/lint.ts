@@ -62,6 +62,8 @@ export const ALWAYS_FATAL: readonly StructuralRule[] = [
   "no_forbidden_words",
   // 数据来源是这个方向的核心:实验输入不能是模型自己编的
   "experiment_inputs_traceable",
+  // 原始数据区只读 —— 往那儿塞东西等于伪造观测
+  "data_dir_untouched",
 ];
 
 /** 致命规则集 = 脊梁两条 ∪ 任务书声明要的。 */

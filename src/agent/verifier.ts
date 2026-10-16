@@ -10,7 +10,7 @@ import type { StatementCheck, TaskDoc } from "../doc/task.ts";
 import type { Ledger } from "../ledger.ts";
 import { streamChat, type Usage } from "../llm.ts";
 import { resolveInside } from "../paths.ts";
-import { looksLikeDataFile, traceInput } from "../provenance.ts";
+import { DATA_DIR, listFiles, looksLikeDataFile, traceInput } from "../provenance.ts";
 
 export interface VerifyOptions {
   config: Config;
@@ -157,7 +157,11 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
   options.onEvent?.(`重放 ${report.claims.reduce((sum, c) => sum + c.evidence.length, 0)} 条证据`);
   const replayOutcomes = await replayEvidence(report, { workspace, timeoutMs });
 
-  const findings = [...lintReport(report, task), ...(await checkDataInputs(options))];
+  const findings = [
+    ...lintReport(report, task),
+    ...(await checkDataInputs(options)),
+    ...(await checkDataDir(options)),
+  ];
   const fatalLint = fatalFindings(findings, task);
 
   const checks = statementChecks(task);
@@ -267,6 +271,37 @@ async function checkDataInputs(options: VerifyOptions): Promise<LintFinding[]> {
     if (verdict.traceable) continue;
 
     findings.push({ rule: "experiment_inputs_traceable", where: path, detail: verdict.detail });
+  }
+
+  return findings;
+}
+
+/**
+ * 原始数据区只读。
+ *
+ * `data/` 按定义只装两种东西:**抓来的**和**用户给的** —— 两者都在溯源链上。
+ * 所以出现一个不在链上的文件,就说明有人往原始数据区里塞了东西,而那些东西
+ * 没有来源。这是"伪造观测"最直接的形式。
+ *
+ * 这条判据不需要前后快照:目录的**内容**本身就说明了问题。
+ *
+ * 注意它拦不住 `run_bash` 往里写 —— 同用户的进程想写就能写。它能做的是
+ * **事后发现**:写进去的东西没来源,任务就判不过。
+ */
+async function checkDataDir(options: VerifyOptions): Promise<LintFinding[]> {
+  const dataDir = join(options.workspace, DATA_DIR);
+  const provenancePath = join(options.runRoot, "provenance.jsonl");
+  const findings: LintFinding[] = [];
+
+  for (const relative of await listFiles(dataDir)) {
+    const verdict = await traceInput(provenancePath, join(dataDir, relative));
+    if (verdict.traceable) continue;
+
+    findings.push({
+      rule: "data_dir_untouched",
+      where: `${DATA_DIR}/${relative}`,
+      detail: `原始数据区里出现了没有来源的文件。${verdict.detail}`,
+    });
   }
 
   return findings;

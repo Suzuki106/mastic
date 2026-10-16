@@ -45,10 +45,18 @@ describe("write_file", () => {
    * 这条是整个数据自证方向最省事的那条造假路径:模型直接 write_file 写一份
    * "实验数据"。内容来自模型,不经过任何外部地址 —— 拿它跑实验等于什么都没测。
    */
-  it("数据文件写不了,而且说清该走哪条路", async () => {
-    await failsWith("write_file", { path: "data/ridership.csv", content: "a,b\n1,2\n" }, "不能用 write_file 直接写");
-    await failsWith("write_file", { path: "x.jsonl", content: "{}\n" }, "fetch_url");
+  // 两条不同的规则,报的错也不一样:
+  //   data/ 下的任何文件 —— 那是原始数据区,按位置拦
+  //   别处的数据扩展名   —— 那是数据文件,按内容来源拦
+  it("原始数据区里什么都不能写", async () => {
+    await failsWith("write_file", { path: "data/ridership.csv", content: "a,b\n1,2\n" }, "原始数据区");
+    await failsWith("write_file", { path: "data/notes.md", content: "记一笔" }, "原始数据区");
+  });
+
+  it("别处的数据文件也写不了,而且说清该走哪条路", async () => {
+    await failsWith("write_file", { path: "x.jsonl", content: "{}\n" }, "不能用 write_file 直接写");
     await failsWith("write_file", { path: "y.parquet", content: "x" }, "run_bash");
+    await failsWith("write_file", { path: "sub/z.csv", content: "a\n1\n" }, "fetch_url");
   });
 
   it("配置和笔记不受影响 —— .json 常常是配置,不拦", async () => {

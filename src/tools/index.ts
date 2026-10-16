@@ -4,7 +4,7 @@ import { recordCommand, recordFile, type Ledger } from "../ledger.ts";
 import { runCommand, sha256Text } from "../exec.ts";
 import type { ToolSchema } from "../llm.ts";
 import { displayPath, resolveInside } from "../paths.ts";
-import { looksLikeDataFile } from "../provenance.ts";
+import { DATA_DIR, isUnderDataDir, looksLikeDataFile } from "../provenance.ts";
 import { webTools } from "./web.ts";
 
 export interface ToolContext {
@@ -93,7 +93,17 @@ const writeFileTool: Tool = {
     const content = requiredString(args, "content");
     const full = resolveInside(ctx.workspace, path);
 
-    // **数据文件不能用这个工具写。**
+    // **data/ 是原始数据区,agent 不能往那儿写。**
+    // 目录是边界,扩展名只是约定 —— 改个后缀就能绕过扩展名检查,目录绕不过去。
+    if (isUnderDataDir(path)) {
+      throw new Error(
+        `\`${path}\` 在 ${DATA_DIR}/ 下 —— 那是原始数据区,agent 不能往里写。\n` +
+          `  要真实数据:用 fetch_url 从外部抓(它会落在这里并记账),或让用户提供。\n` +
+          `  实验产出请写到别处(比如 out/)。`,
+      );
+    }
+
+    // **数据文件也不能用这个工具写。**
     //
     // `write_file` 的内容来自模型 —— 拿它写一份 csv/jsonl,就等于凭空造了
     // 一份"实验数据",而实验会因此什么都没测。这是造假最省事的路径,堵在这里。
