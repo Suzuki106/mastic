@@ -54,6 +54,8 @@ export interface ToolLoopResult {
   terminalArgs: Record<string, unknown> | null;
   status: "submitted" | "steps";
   usage: Usage | null;
+  /** 实际用掉几步。运行级预算靠它扣账 —— 用掉多少扣多少,不是按上限扣。 */
+  steps: number;
 }
 
 function addUsage(total: Usage | null, next: Usage | null): Usage | null {
@@ -106,7 +108,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     if (steps >= options.maxSteps) {
       if (finalRound) {
         options.onEvent?.({ kind: "stopped", detail: `用满 ${options.maxSteps} 步也没交卷` });
-        return { terminalArgs: null, status: "steps", usage };
+        return { terminalArgs: null, status: "steps", usage, steps };
       }
 
       // 步数用尽不该什么都不留下。再给一轮,专门用来交卷 ——
@@ -189,7 +191,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     const signature = signatureOf(toolCalls);
     if (signature === previousSignature) {
       options.onEvent?.({ kind: "stopped", detail: "模型在重复同一组调用,判定卡住" });
-      return { terminalArgs: null, status: "steps", usage };
+      return { terminalArgs: null, status: "steps", usage, steps };
     }
     previousSignature = signature;
     steps += 1;
@@ -217,7 +219,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
         if (rejection === undefined) {
           options.onEvent?.({ kind: "assistant", detail: "已交卷" });
-          return { terminalArgs: args, status: "submitted", usage };
+          return { terminalArgs: args, status: "submitted", usage, steps };
         }
 
         options.onEvent?.({ kind: "rejected", detail: preview(rejection) });

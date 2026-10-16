@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { runPool } from "../src/orchestrator.ts";
+import { allocateSteps, runPool } from "../src/orchestrator.ts";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve: () => void = () => {};
@@ -63,5 +63,35 @@ describe("并发闸门", () => {
       }),
       /第 2 个炸了/,
     );
+  });
+});
+
+/**
+ * 预算分配。
+ *
+ * 这一组盯的是一个原则:**分配规则必须是固定的算式,不能是模型报的数。**
+ * 原先每份任务书里写着 planner 拍的 `max_steps`,而那个数没有刻度 ——
+ * 它这次的"30"和下次的"30"对应的难度不是一个东西,而**不可比的数
+ * 不能用来分配资源**。
+ */
+describe("步数分配", () => {
+  it("剩余预算平摊给还没开始的任务", () => {
+    assert.equal(allocateSteps(400, 8, 80), 50);
+    assert.equal(allocateSteps(400, 4, 80), 80, "算出来超过硬顶就压到硬顶");
+  });
+
+  it("剩余越少,分得越少 —— 先做的占便宜,这是有意的", () => {
+    assert.equal(allocateSteps(400, 8, 80), 50);
+    assert.equal(allocateSteps(100, 8, 80), 12);
+    assert.equal(allocateSteps(16, 8, 80), 2);
+  });
+
+  it("再紧也至少给一步,不然任务连交卷的机会都没有", () => {
+    assert.equal(allocateSteps(0, 5, 80), 1);
+    assert.equal(allocateSteps(-10, 5, 80), 1);
+  });
+
+  it("没有剩余任务时给硬顶(边界,实际用不到)", () => {
+    assert.equal(allocateSteps(400, 0, 80), 80);
   });
 });

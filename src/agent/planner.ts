@@ -74,7 +74,6 @@ acceptance:
   - { kind: structural, require: [evidence_for_every_claim, no_forbidden_words] }
 constraints:
   - 不要改 public API
-budget: { max_steps: 24 }
 ---
 
 ## 背景
@@ -98,9 +97,6 @@ budget: { max_steps: 24 }
   写出来只是声明)、no_unresolved(要求不许留未解决项)、deliverable_matches_task。
 - \`allow_terms\`:只有任务本身就在讲那些词时才写(比如「写一个 mock server」)。
   这是给误报留的唯一出口,别拿它当挡箭牌。
-- \`budget.max_steps\` 是 worker 的工具往返上限,**宁可给宽一点**:
-  在真实仓库里光是把相关文件读明白就可能花掉十几步,给窄了任务会在
-  做到一半时被截断。改动一个文件给 30,涉及多文件或要反复跑测试给 60。
 
 ## 交卷
 

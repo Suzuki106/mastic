@@ -7,6 +7,7 @@ import { saveImage, type IncomingImage } from "./attachments.ts";
 import type { Config } from "./config.ts";
 import { parseTaskDoc, type TaskDoc } from "./doc/task.ts";
 import { createEventBus, runEventOf, type RunEvent } from "./events.ts";
+import { allocateSteps } from "./orchestrator.ts";
 import { discoveryTools } from "./tools/index.ts";
 import {
   readReport,
@@ -118,7 +119,12 @@ export async function resumeRun(
   const run = await readRunDoc(paths);
   bus.emit({ kind: "run_start", detail: `续跑 ${targets.map((task) => task.id).join("、")}` });
 
-  for (const task of targets) {
+  // 和整次运行同一套分配:剩余预算 ÷ 还没做的任务数。
+  // 绝不退回"每个任务一个固定数"——那又变成拍脑袋了。
+  let remainingSteps = config.runBudgetSteps;
+
+  for (const [index, task] of targets.entries()) {
+    const maxSteps = allocateSteps(remainingSteps, targets.length - index, config.taskStepCeiling);
     bus.emit({ kind: "task_start", task: task.id, detail: "续跑" });
 
     const worked = await work({
@@ -128,6 +134,7 @@ export async function resumeRun(
       runRoot: paths.root,
       timeoutMs: config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
+      maxSteps,
       onEvent: (event) => bus.emit(runEventOf(event.kind, task.id, event.detail)),
     });
 
@@ -135,6 +142,7 @@ export async function resumeRun(
       const failure = worked.failure ?? "worker 没有交卷";
       bus.emit({ kind: "task_verdict", task: task.id, detail: `没交卷 —— ${failure}` });
       outcomes.push({ taskId: task.id, status: "failed", reasons: [failure], failure });
+      remainingSteps = Math.max(0, remainingSteps - worked.steps);
       continue;
     }
 
@@ -153,6 +161,7 @@ export async function resumeRun(
     await writeReport(paths, report);
     bus.emit({ kind: "task_verdict", task: task.id, detail: `${verdict.status} —— ${verdict.reasons[0] ?? ""}` });
     outcomes.push({ taskId: task.id, status: verdict.status, reasons: verdict.reasons });
+    remainingSteps = Math.max(0, remainingSteps - worked.steps);
   }
 
   const done = outcomes.every((outcome) => outcome.status === "verified" || outcome.status === "unverified");
@@ -228,7 +237,7 @@ export async function continueRun(
     timeoutMs: config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,
-    maxSteps: config.maxSteps,
+    maxSteps: config.plannerSteps,
     existing,
     ...(planned.length === 0 ? {} : { images: planned }),
     onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),

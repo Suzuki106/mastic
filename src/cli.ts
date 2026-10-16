@@ -22,7 +22,7 @@ const HELP = `mastic —— 文档驱动的多 agent
   --workspace <路径>   agent 动手的目录(默认当前目录)
   --concurrency <n>    同时跑几个 worker(默认 3)
   --retries <n>        被判定 contradicted 后最多重派几次(默认 2)
-  --plan-steps <n>     planner 最多几步(默认 30)
+  --plan-steps <n>     planner 最多几步(默认 40)
   --port <n>           ui 的端口(默认 7777)
   --quiet              只在最后打印总结
 `;

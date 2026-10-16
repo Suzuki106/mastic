@@ -173,7 +173,6 @@ acceptance:
 constraints:
   - 不得修改 test/slugify.test.js 与 package.json
   - 不引入任何第三方依赖
-budget: { max_steps: 30 }
 ---
 ## 背景
 ## 交付要求
@@ -285,7 +284,9 @@ inputs:
 | `MASTIC_WORKSPACE` | 当前目录 | agent 动手的目录 |
 | `MASTIC_CONCURRENCY` | `3` | 同时跑几个 worker |
 | `MASTIC_MAX_RETRIES` | `2` | 判 contradicted 后最多重派几次 |
-| `MASTIC_MAX_STEPS` | `30` | worker 单个任务最多几步 |
+| `MASTIC_RUN_BUDGET_STEPS` | `400` | 整次运行的步数总预算 |
+| `MASTIC_TASK_STEP_CEILING` | `80` | 单个任务的硬顶 |
+| `MASTIC_PLANNER_STEPS` | `40` | planner 最多几步 |
 | `MASTIC_COMMAND_TIMEOUT_MS` | `300000` | 验收命令超时 |
 | `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `240000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
 | `MASTIC_VISION` | `1` | 模型收不收图。设 0 时界面不显示上传入口 |

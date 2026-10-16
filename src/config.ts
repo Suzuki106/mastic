@@ -8,8 +8,26 @@ export interface Config {
   concurrency: number;
   /** 被 verifier 判 contradicted 之后,最多重派几次。 */
   maxRetries: number;
-  /** 单个 worker 一轮最多几次工具往返 —— 防模型无限往下钻。 */
-  maxSteps: number;
+  /**
+   * 整次运行的工具往返总预算。
+   *
+   * 这是**机器的数**,不是模型的数。原先每份任务书里有个 `max_steps`,
+   * 由 planner 拍脑袋写 —— 那个数字没有刻度:它这次的"30 步"和下次的"30 步"
+   * 对应的难度不是一回事,而**不可比的数不能用来分配资源**。
+   */
+  runBudgetSteps: number;
+  /**
+   * planner 最多几步。
+   *
+   * 只有一个 planner,所以不存在"分配"问题 —— 给它一个固定份额就行。
+   * 但它仍然是个**机器的数**:不是模型对着"这个目标难不难"报出来的。
+   */
+  plannerSteps: number;
+  /**
+   * 单个任务的硬顶。真正的上限由"剩余预算 ÷ 剩余任务数"推出,这个只是天花板 ——
+   * 防止某个任务把整次运行的预算一次吃光。
+   */
+  taskStepCeiling: number;
   /** 跑验收命令 / 重放证据的超时(毫秒)。 */
   commandTimeoutMs: number;
   /** 当前模型收不收图片。关掉之后界面上不会出现上传入口。 */
@@ -76,7 +94,9 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     workspace: optional("MASTIC_WORKSPACE") ?? process.cwd(),
     concurrency: positiveInt("MASTIC_CONCURRENCY", 3),
     maxRetries: positiveInt("MASTIC_MAX_RETRIES", 2),
-    maxSteps: positiveInt("MASTIC_MAX_STEPS", 30),
+    runBudgetSteps: positiveInt("MASTIC_RUN_BUDGET_STEPS", 400),
+    plannerSteps: positiveInt("MASTIC_PLANNER_STEPS", 40),
+    taskStepCeiling: positiveInt("MASTIC_TASK_STEP_CEILING", 80),
     commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
     requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 240_000),
     vision: visionEnabled(),

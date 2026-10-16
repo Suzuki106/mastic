@@ -115,7 +115,7 @@ unresolved:
 
 ## 关于步数
 
-你有 \`budget.max_steps\` 步工具往返。**别把步数全花在调查上** ——
+你有步数上限(由这次运行的剩余预算分配而来)。**别把步数全花在调查上** ——
 读几个关键文件就该动手,边做边跑测试。步数用尽时你会被要求立刻交卷,
 那时候只能交一份不完整的报告。宁可早点交一份诚实的,也不要查到最后交不出东西。`;
 
@@ -127,6 +127,8 @@ export interface WorkOptions {
   runRoot: string;
   timeoutMs: number;
   maxOutputChars: number;
+  /** 这轮最多几步。由调用方按剩余预算分配,不由任务书决定。 */
+  maxSteps: number;
   /** 上一轮 verifier 的结论。重试时才有。 */
   findings?: string[];
   onEvent?: (event: LoopEvent) => void;
@@ -140,6 +142,8 @@ export interface WorkResult {
   ledger: Ledger;
   usage: Usage | null;
   failure?: string;
+  /** 这一轮实际用掉几步。运行级预算按实际扣,不按上限扣。 */
+  steps: number;
 }
 
 /**
@@ -249,7 +253,7 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
     tools: [...workerTools, REPORT_TOOL],
     toolContext,
     terminalTool: "submit_report",
-    maxSteps: options.task.budget.max_steps,
+    maxSteps: options.maxSteps,
     onEvent: options.onEvent,
 
     onTerminal: (args) => {
@@ -294,16 +298,24 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
       );
     }
 
-    return { report: resolved, draft: accepted, ledger, usage: result.usage, preexistingData: [...before.keys()] };
+    return {
+      report: resolved,
+      draft: accepted,
+      ledger,
+      usage: result.usage,
+      steps: result.steps,
+      preexistingData: [...before.keys()],
+    };
   }
 
   return {
     ledger,
     preexistingData: [...before.keys()],
     usage: result.usage,
+    steps: result.steps,
     failure:
       result.status === "steps"
-        ? `worker 用满 ${options.task.budget.max_steps} 步也没交出一份合格的报告。`
+        ? `worker 用满 ${options.maxSteps} 步也没交出一份合格的报告。`
         : "worker 没有交卷。",
   };
 }

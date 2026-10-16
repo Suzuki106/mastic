@@ -29,6 +29,8 @@ export interface TaskOutcome {
   status: ReportStatus | "failed" | "skipped";
   attempts: number;
   failure?: string;
+  /** 这个任务(含重试)用掉几步。运行级预算按它扣。 */
+  steps: number;
   /** 这个任务(含重试)烧掉的 token。 */
   usage: RunUsage;
 }
@@ -70,6 +72,22 @@ function addUsage(total: RunUsage, next: Usage | null): RunUsage {
   };
 }
 
+/**
+ * 一个任务能拿多少步。
+ *
+ * **剩余预算 ÷ 还没开始的任务数**,再压到硬顶之下。
+ *
+ * 关键是这里没有模型的位置:数从哪来、怎么分,都是固定规则。原先每份任务书里
+ * 写着 planner 拍的 `max_steps`,而那个数没有刻度 —— 它这次的"30"和下次的"30"
+ * 对应的难度不是一个东西。**不可比的数不能用来分配资源。**
+ *
+ * 于是:先做的任务剩余多、拿得多,后做的拿得少,加起来不超过总预算。
+ */
+export function allocateSteps(remaining: number, tasksLeft: number, ceiling: number): number {
+  if (tasksLeft <= 0) return ceiling;
+  return Math.max(1, Math.min(ceiling, Math.floor(remaining / tasksLeft)));
+}
+
 /** 并发闸门:同时最多 limit 个在跑,跑完一个补一个。 */
 export async function runPool<T>(
   items: T[],
@@ -105,12 +123,14 @@ async function runTask(
   paths: RunPaths,
   emit: (event: Omit<RunEvent, "seq" | "at" | "run">) => void,
   task: TaskDoc,
+  maxSteps: number,
 ): Promise<TaskOutcome> {
   const maxAttempts = options.config.maxRetries + 1;
   let findings: string[] | undefined;
   let lastFailure = "没有尝试过";
   let lastStatus: "contradicted" | "failed" = "failed";
   let usage: RunUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  let usedSteps = 0;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     emit({
@@ -126,11 +146,13 @@ async function runTask(
       runRoot: paths.root,
       timeoutMs: options.config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
+      maxSteps,
       ...(findings === undefined ? {} : { findings }),
       onEvent: (event) => emit(runEventOf(event.kind, task.id, event.detail)),
     });
 
     usage = addUsage(usage, worked.usage);
+    usedSteps += worked.steps;
 
     if (worked.report === undefined) {
       lastFailure = worked.failure ?? "worker 没有交卷";
@@ -161,7 +183,7 @@ async function runTask(
     });
 
     if (verdict.status !== "contradicted") {
-      return { task, report, status: verdict.status, attempts: attempt, usage };
+      return { task, report, status: verdict.status, attempts: attempt, usage, steps: usedSteps };
     }
 
     lastFailure = verdict.reasons.join(";");
@@ -183,6 +205,7 @@ async function runTask(
     attempts: maxAttempts,
     failure: `重试 ${options.config.maxRetries} 次仍未通过:${lastFailure}`,
     usage,
+    steps: usedSteps,
   };
 }
 
@@ -274,7 +297,7 @@ async function runOrchestration(
     timeoutMs: options.config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,
-    maxSteps: options.planSteps ?? 30,
+    maxSteps: options.planSteps ?? options.config.plannerSteps,
     // kind 要原样带过去 —— 尤其 thinking:"还在请求模型"和"读完一个文件"
     // 在前端是两种东西,压成一种就画不出进行中的状态了
     onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),
@@ -306,6 +329,8 @@ async function runOrchestration(
   });
 
   const outcomes = new Map<string, TaskOutcome>();
+  // 运行级预算。用掉多少扣多少 —— 按实际消耗,不按上限。
+  let remainingSteps = options.config.runBudgetSteps;
 
   for (const layer of layers) {
     // 取消只在任务边界生效 —— 不打断正在跑的那个,免得留下半截工作区
@@ -318,9 +343,28 @@ async function runOrchestration(
           attempts: 0,
           failure: "用户取消了这次运行。",
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          steps: 0,
         });
       }
       bus.emit({ kind: "run_done", detail: "已取消" });
+      break;
+    }
+
+    // 预算用完了就不再往下做。这是**运行级**的事实,不是某个任务运气不好 ——
+    // 报的是"还剩几个没做",而不是"T-001 用了 30 步所以失败"。
+    if (remainingSteps <= 0) {
+      for (const task of planned.tasks) {
+        if (outcomes.has(task.id)) continue;
+        outcomes.set(task.id, {
+          task,
+          status: "skipped",
+          attempts: 0,
+          failure: `这次运行的步数预算(${options.config.runBudgetSteps})用完了,没轮到它。`,
+          usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          steps: 0,
+        });
+        bus.emit({ kind: "task_skipped", task: task.id, detail: "预算用完了" });
+      }
       break;
     }
 
@@ -337,6 +381,7 @@ async function runOrchestration(
           attempts: 0,
           failure,
           usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+          steps: 0,
         });
         bus.emit({ kind: "task_skipped", task: task.id, detail: failure });
         continue;
@@ -345,10 +390,19 @@ async function runOrchestration(
       runnable.push(task);
     }
 
+    // 这一层每个任务能拿多少:在派活之前一次算好。
+    // 写进回调里算的话,并行起来的几个任务会各读一次同一个剩余量,分不准。
+    const notStarted = planned.tasks.filter((task) => !outcomes.has(task.id)).length;
+    const layerLimit = allocateSteps(remainingSteps, notStarted, options.config.taskStepCeiling);
+
+    let layerUsed = 0;
     await runPool(runnable, options.config.concurrency, async (task) => {
-      const outcome = await runTask(options, paths, (event) => bus.emit(event), task);
+      const outcome = await runTask(options, paths, (event) => bus.emit(event), task, layerLimit);
+      layerUsed += outcome.steps;
       outcomes.set(task.id, outcome);
     });
+
+    remainingSteps = Math.max(0, remainingSteps - layerUsed);
   }
 
   const ordered = planned.tasks.map((task) => outcomes.get(task.id)).filter((o): o is TaskOutcome => o !== undefined);

@@ -85,7 +85,6 @@ export interface TaskDoc {
   constraints: string[];
   /** 这份任务书里,哪些词不算违规(比如任务本身就是"写一个 mock server")。 */
   allow_terms: string[];
-  budget: { max_steps: number };
   body: string;
 }
 
@@ -262,9 +261,6 @@ export function parseTaskDoc(raw: string): TaskParseResult {
     errors.push("`acceptance` 不能是空列表 —— 没有指标的任务不该被派出去。");
   }
 
-  const budgetRaw = readRecord(data, "budget", errors);
-  const maxSteps = budgetRaw === undefined ? 30 : readInt(budgetRaw, "max_steps", errors, 30);
-
   const task: TaskDoc = {
     id: id ?? "",
     title: readString(data, "title", errors) ?? "",
@@ -275,7 +271,6 @@ export function parseTaskDoc(raw: string): TaskParseResult {
     acceptance,
     constraints: readStringArray(data, "constraints", errors),
     allow_terms: readStringArray(data, "allow_terms", errors),
-    budget: { max_steps: maxSteps },
     body: parsed.body,
   };
 
@@ -313,7 +308,6 @@ export function taskToData(task: TaskDoc): Record<string, unknown> {
   if (task.inputs.length > 0) data.inputs = task.inputs;
   if (task.constraints.length > 0) data.constraints = task.constraints;
   if (task.allow_terms.length > 0) data.allow_terms = task.allow_terms;
-  data.budget = task.budget;
 
   return data;
 }
