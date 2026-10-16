@@ -150,6 +150,8 @@ export interface PlanOptions {
   config: Config;
   goal: string;
   workspace: string;
+  /** 本次运行的目录。抓下来的数据和溯源链在这儿。 */
+  runRoot: string;
   /** 用户随需求一起传上来的图。planner 看得见,才能把要求拆对。 */
   images?: PlanImage[];
   /** 现有任务树。给了就是**追加模式**:只输出新增任务。 */
@@ -178,6 +180,7 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   // planner 只摸现场不动手,台账留着不用 —— 但工具签名要求它存在
   const toolContext: ToolContext = {
     workspace: options.workspace,
+    runRoot: options.runRoot,
     ledger: createLedger(),
     timeoutMs: options.timeoutMs,
     maxOutputChars: options.maxOutputChars,

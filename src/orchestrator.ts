@@ -266,6 +266,7 @@ async function runOrchestration(
     config: options.config,
     goal: options.goal,
     workspace: options.workspace,
+    runRoot: paths.root,
     ...(images.length === 0 ? {} : { images }),
     timeoutMs: options.config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,

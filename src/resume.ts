@@ -221,6 +221,7 @@ export async function continueRun(
     config,
     goal,
     workspace,
+    runRoot: paths.root,
     timeoutMs: config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,

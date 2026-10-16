@@ -4,9 +4,12 @@ import { recordCommand, recordFile, type Ledger } from "../ledger.ts";
 import { runCommand, sha256Text } from "../exec.ts";
 import type { ToolSchema } from "../llm.ts";
 import { displayPath, resolveInside } from "../paths.ts";
+import { webTools } from "./web.ts";
 
 export interface ToolContext {
   workspace: string;
+  /** 本次运行的目录。抓下来的数据、溯源链都落在这儿 —— 不在工作区里。 */
+  runRoot: string;
   ledger: Ledger;
   timeoutMs: number;
   /** 一次工具调用最多回灌多少字符 —— 返回一大坨会当场炸掉上下文。 */
@@ -195,10 +198,11 @@ const runBashTool: Tool = {
   },
 };
 
-export const workerTools: readonly Tool[] = [readFileTool, writeFileTool, listDirTool, runBashTool];
+export const workerTools: readonly Tool[] = [readFileTool, writeFileTool, listDirTool, runBashTool, ...webTools];
 
 /** 只能看、不能改 —— planner 摸现场用。给它 bash 等于让它提前动手。 */
-export const discoveryTools: readonly Tool[] = [readFileTool, listDirTool];
+// planner 也要联网 —— 它得先找得到真实数据源,才能写得出引用它的任务书
+export const discoveryTools: readonly Tool[] = [readFileTool, listDirTool, ...webTools];
 
 export function toolSchemas(tools: readonly Tool[]): ToolSchema[] {
   return tools.map((tool) => tool.schema);

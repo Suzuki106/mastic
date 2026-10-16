@@ -1,6 +1,8 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import { resolveInside } from "./paths.ts";
+import { appendProvenance } from "./provenance.ts";
 
 /**
  * 用户随需求一起传上来的图片。
@@ -89,9 +91,21 @@ export async function saveImage(
 
   const relative = join("attachments", `${index + 1}${safeExtension(image.name, parsed.mediaType)}`);
   const target = resolveInside(runRoot, relative);
+  const bytes = Buffer.from(parsed.base64, "base64");
 
   await mkdir(join(runRoot, "attachments"), { recursive: true });
-  await writeFile(target, Buffer.from(parsed.base64, "base64"));
+  await writeFile(target, bytes);
+
+  // 记进溯源链。用户提供和外部抓取是两个并列的合法来源 ——
+  // 实验拿它当输入时,得能沿链走回这里,而不是走回"模型写的"。
+  await appendProvenance(join(runRoot, "provenance.jsonl"), {
+    kind: "user",
+    path: relative,
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    bytes: bytes.byteLength,
+    contentType: parsed.mediaType,
+    ...(image.name === undefined ? {} : { note: `用户上传:${image.name}` }),
+  });
 
   return { path: relative, mediaType: parsed.mediaType, bytes: parsed.bytes };
 }

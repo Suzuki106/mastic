@@ -207,6 +207,7 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
   const ledger = createLedger();
   const toolContext: ToolContext = {
     workspace: options.workspace,
+    runRoot: options.runRoot,
     ledger,
     timeoutMs: options.timeoutMs,
     maxOutputChars: options.maxOutputChars,

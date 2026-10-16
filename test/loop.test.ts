@@ -21,6 +21,7 @@ const config: Config = {
 
 const toolContext: ToolContext = {
   workspace: "/tmp",
+  runRoot: "/tmp",
   ledger: createLedger(),
   timeoutMs: 1000,
   maxOutputChars: 1000,

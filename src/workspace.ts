@@ -18,6 +18,10 @@ export interface RunPaths {
   tasksDir: string;
   reportsDir: string;
   eventsFile: string;
+  /** 数据溯源链:外部抓来的每一份数据都在这儿留一条带摘要的记录。 */
+  provenanceFile: string;
+  /** 抓下来的原始数据。 */
+  fetchedDir: string;
 }
 
 export interface RunUsage {
@@ -51,6 +55,8 @@ export function runPaths(workspace: string, id: string): RunPaths {
     tasksDir: join(root, "tasks"),
     reportsDir: join(root, "reports"),
     eventsFile: join(root, "events.jsonl"),
+    provenanceFile: join(root, "provenance.jsonl"),
+    fetchedDir: join(root, "fetched"),
   };
 }
 
@@ -58,6 +64,7 @@ export async function createRun(workspace: string, id: string): Promise<RunPaths
   const paths = runPaths(workspace, id);
   await mkdir(paths.tasksDir, { recursive: true });
   await mkdir(paths.reportsDir, { recursive: true });
+  await mkdir(paths.fetchedDir, { recursive: true });
   return paths;
 }
 
