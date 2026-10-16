@@ -16,3 +16,6 @@ dist/
 .env
 .env.*
 !.env.example
+
+# npm pack 出来的包
+*.tgz

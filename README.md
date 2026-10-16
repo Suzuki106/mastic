@@ -93,6 +93,44 @@ npm run mastic -- run "把 README 里的 TODO 都补上"    # 命令行
 前端改完要重新构建:`npm run build:web`。开发时用 `npm run dev:web`
 (带热更新,并把 `/api` 代理到 7777 上的 `mastic ui`)。
 
+### 装到服务器上
+
+`npm pack` 打一个包(含**预构建好的界面**),拷过去解开就能用:
+
+```bash
+# 本地
+npm pack                       # 得到 mastic-0.1.0.tgz(约 170KB)
+scp mastic-0.1.0.tgz 服务器:~/
+
+# 服务器上
+tar xzf mastic-0.1.0.tgz && mv package mastic && cd mastic
+npm install --omit=dev         # 只装运行时要的:1 个包,1.4MB
+cp .env.example .env && vim .env
+
+node bin/mastic.mjs help       # 能跑
+```
+
+想做成任意目录都能敲的命令,加个软链:
+
+```bash
+ln -s "$PWD/bin/mastic.mjs" ~/.local/bin/mastic
+mastic help
+```
+
+**别用 `npm install -g` 装。** Node 明确拒绝给 `node_modules` 下的文件擦除类型:
+
+```
+ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING
+```
+
+这个项目靠 Node 直接跑 `.ts`,而那个机制对 `node_modules` 关着门 ——
+装进去就起不来。解包到普通目录(外加软链)是正路。
+
+**服务器上必须是 Node ≥ 23.6**,这是硬要求:`node --version` 先看一眼。
+
+`.env` 按**你当前所在的目录**找,不是按包装在哪找 —— 所以在哪个项目里跑
+`mastic`,就读哪个项目的 `.env`。
+
 ## 命令
 
 ```bash
