@@ -1,6 +1,6 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { dirname } from "node:path";
+import { dirname, extname, join } from "node:path";
 
 /**
  * 数据溯源链。
@@ -22,12 +22,17 @@ import { dirname } from "node:path";
  */
 
 /**
- * - `fetch`  从外部地址抓来的
- * - `user`   用户提供的(上传的图、贴的文件)
- * - `search` 搜过什么(是"发现"不是数据,但让来路可查)
- * - `note`   其它需要留痕的事
+ * - `fetch`   从外部地址抓来的
+ * - `user`    用户提供的(上传的图、贴的文件)
+ * - `derived` 实验**产出**的数据 —— 由哪个任务、跑过哪些命令产生的
+ * - `search`  搜过什么(是"发现"不是数据,但让来路可查)
+ * - `note`    其它需要留痕的事
+ *
+ * `derived` 是给产出签的字。光给输入签字不够:一份实验结果也要能被指认
+ * "它是哪个任务、用哪些命令、从哪些输入算出来的",否则产出就是一堆
+ * 没有出处的数字。
  */
-export type ProvenanceKind = "fetch" | "user" | "search" | "note";
+export type ProvenanceKind = "fetch" | "user" | "derived" | "search" | "note";
 
 export interface ProvenanceEntry {
   /** 从 1 开始,连续。 */
@@ -49,6 +54,11 @@ export interface ProvenanceEntry {
   /** kind = search */
   query?: string;
   resultCount?: number;
+
+  /** kind = derived:哪个任务产出的。 */
+  task?: string;
+  /** kind = derived:这个任务跑过的命令编号(台账里的 C 号)。 */
+  commands?: string[];
 
   /** kind = note */
   note?: string;
@@ -147,8 +157,17 @@ export function verifyChain(entries: ProvenanceEntry[]): ChainCheck {
   return { ok: true, length: entries.length };
 }
 
-/** 可以当实验输入的来源。**只有这两种。** */
-export type TraceHow = "fetched" | "user";
+/**
+ * 可以当实验输入的来源。
+ *
+ * - `fetched` 外部抓来的
+ * - `user`    用户提供的
+ * - `produced` 前面某个任务产出的(链上有签字:哪个任务、哪些命令)
+ *
+ * 前两种是**源头**;`produced` 不是源头,但它是链条中间的一环 —— 一份由
+ * T-003 算出来并签了字的结果,下游任务当然可以用。真正的源头在更上游。
+ */
+export type TraceHow = "fetched" | "user" | "produced";
 
 export interface TraceResult {
   traceable: boolean;
@@ -191,6 +210,13 @@ export async function traceInput(
   if (hit?.kind === "user") {
     return { traceable: true, how: "user", detail: `用户提供(溯源 #${hit.seq})` };
   }
+  if (hit?.kind === "derived") {
+    return {
+      traceable: true,
+      how: "produced",
+      detail: `${hit.task ?? "?"} 产出的(溯源 #${hit.seq},用了 ${hit.commands?.join("、") ?? "无"} 号命令)`,
+    };
+  }
 
   return {
     traceable: false,
@@ -199,4 +225,128 @@ export async function traceInput(
       `它多半是模型自己写出来或算出来的 —— 不能当实验输入。` +
       `要么用 fetch_url 从外部抓,要么让用户提供。`,
   };
+}
+
+export interface OutputRecord {
+  /** 相对 run 目录或工作目录,调用方自己定,原样记下。 */
+  path: string;
+  sha256: string;
+  bytes?: number;
+}
+
+/**
+ * 给这次任务**产出的数据**签字。
+ *
+ * 记的是三件事:产出了什么(路径 + 摘要)、谁产的(任务号)、怎么产的(跑过的命令)。
+ * 这样一份结果文件不再是一堆没有出处的数字 —— 顺着链能回到是哪个任务、
+ * 用了哪些命令、再往前是哪些输入。
+ *
+ * 非数据文件(源码、测试)不签 —— 那是代码不是实验数据,签了只会把链淹掉。
+ */
+export async function signOutputs(
+  provenancePath: string,
+  taskId: string,
+  outputs: OutputRecord[],
+  commands: string[],
+): Promise<ProvenanceEntry[]> {
+  const signed: ProvenanceEntry[] = [];
+
+  for (const output of outputs) {
+    signed.push(
+      await appendProvenance(provenancePath, {
+        kind: "derived",
+        path: output.path,
+        sha256: output.sha256,
+        ...(output.bytes === undefined ? {} : { bytes: output.bytes }),
+        task: taskId,
+        commands,
+      }),
+    );
+  }
+
+  return signed;
+}
+
+/**
+ * 什么算"数据文件"。
+ *
+ * 只有这些进溯源判定 —— 源码、测试、配置不算实验数据,拉进来只会把链淹掉,
+ * 而且会误伤(.json 当配置用时不该被要求证明来源)。
+ */
+export const DATA_EXTENSIONS = [".csv", ".tsv", ".jsonl", ".parquet", ".xlsx", ".npz", ".npy", ".h5", ".arrow"];
+
+export function looksLikeDataFile(path: string): boolean {
+  return DATA_EXTENSIONS.includes(extname(path).toLowerCase());
+}
+
+/** 扫的时候跳过的目录 —— 那里面的"数据"不是实验数据。 */
+const SKIP_DIRS = new Set([".git", "node_modules", ".mastic", "dist", "build", "__pycache__", ".venv", "venv"]);
+
+/**
+ * 给工作区里的数据文件拍一张快照(路径 → 摘要)。
+ *
+ * 任务开始前拍一张、结束后拍一张,**差集就是这次产出的数据**。这样不需要
+ * worker 声明产出了什么 —— 它要是不声明,产出就没人签;而"忘了声明"是最容易
+ * 发生也最不该发生的事。机器自己看得见的东西,就别去问模型。
+ */
+export async function snapshotDataFiles(
+  root: string,
+  limits: { files?: number; bytes?: number } = {},
+): Promise<Map<string, string>> {
+  const maxFiles = limits.files ?? 2000;
+  const maxBytes = limits.bytes ?? 64 * 1024 * 1024;
+
+  const found = new Map<string, string>();
+  let totalBytes = 0;
+
+  const walk = async (dir: string, prefix: string): Promise<void> => {
+    if (found.size >= maxFiles || totalBytes >= maxBytes) return;
+
+    let entries;
+    try {
+      entries = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (found.size >= maxFiles || totalBytes >= maxBytes) return;
+
+      const relative = prefix === "" ? entry.name : `${prefix}/${entry.name}`;
+
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        await walk(join(dir, entry.name), relative);
+        continue;
+      }
+
+      if (!entry.isFile() || !looksLikeDataFile(entry.name)) continue;
+
+      try {
+        const content = await readFile(join(dir, entry.name));
+        totalBytes += content.byteLength;
+        found.set(relative, createHash("sha256").update(content).digest("hex"));
+      } catch {
+        // 读不到就跳过,不该因为一个文件让整次快照失败
+      }
+    }
+  };
+
+  await walk(root, "");
+  return found;
+}
+
+/** 前后两张快照的差:新增的、以及内容变了的。 */
+export function addedOrChanged(
+  before: Map<string, string>,
+  after: Map<string, string>,
+): OutputRecord[] {
+  const outputs: OutputRecord[] = [];
+
+  for (const [path, sha256] of after) {
+    if (before.get(path) === sha256) continue;
+    outputs.push({ path, sha256 });
+  }
+
+  return outputs;
 }

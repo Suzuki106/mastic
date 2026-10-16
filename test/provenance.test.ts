@@ -5,8 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import {
+  addedOrChanged,
   appendProvenance,
   readProvenance,
+  signOutputs,
+  snapshotDataFiles,
   traceInput,
   verifyChain,
 } from "../src/provenance.ts";
@@ -144,5 +147,51 @@ describe("实验输入能不能溯源", () => {
     const verdict = await traceInput(chain, join(root, "并不存在.csv"));
     assert.equal(verdict.traceable, false);
     assert.ok(verdict.detail.includes("读不到"));
+  });
+});
+
+describe("产出的签字", () => {
+  it("扫出来的数据文件能前后对比出差集", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mastic-snap-"));
+    try {
+      await writeFile(join(dir, "old.csv"), "a,b\n1,2\n", "utf8");
+      await writeFile(join(dir, "code.py"), "print(1)\n", "utf8");
+      const before = await snapshotDataFiles(dir);
+
+      await writeFile(join(dir, "new.csv"), "a,b\n3,4\n", "utf8");
+      await writeFile(join(dir, "old.csv"), "a,b\n9,9\n", "utf8");
+      const after = await snapshotDataFiles(dir);
+
+      const produced = addedOrChanged(before, after);
+      assert.deepEqual(
+        produced.map((p) => p.path).sort(),
+        ["new.csv", "old.csv"],
+        "新增的和改过的都算产出;源码不算",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("产出的签字里带着任务号和命令号", async () => {
+    const path = join(root, "chain-out.jsonl");
+    const signed = await signOutputs(path, "T-003", [{ path: "out/run_times.json", sha256: "abc123" }], ["C5", "C8"]);
+
+    assert.equal(signed.length, 1);
+    assert.equal(signed[0]?.kind, "derived");
+    assert.equal(signed[0]?.task, "T-003");
+    assert.deepEqual(signed[0]?.commands, ["C5", "C8"]);
+    assert.equal(verifyChain(await readProvenance(path)).ok, true);
+  });
+
+  it("产出的摘要进了链,于是它能被当输入引用", async () => {
+    const path = join(root, "chain-out2.jsonl");
+    const data = join(root, "result.csv");
+    await writeFile(data, "x,y\n1,2\n", "utf8");
+    const sha = await shaOf(data);
+
+    await signOutputs(path, "T-001", [{ path: "result.csv", sha256: sha }], []);
+    const verdict = await traceInput(path, data);
+    assert.equal(verdict.traceable, true, "自己产出的数据,下游任务可以放心地用");
   });
 });

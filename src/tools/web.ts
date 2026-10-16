@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { basename, extname, join } from "node:path";
+import { basename, join } from "node:path";
 import { appendProvenance, readProvenance } from "../provenance.ts";
 import { resolveInside } from "../paths.ts";
 import type { Tool, ToolContext } from "./index.ts";
@@ -9,9 +9,20 @@ const TAVILY_ENDPOINT = "https://api.tavily.com/search";
 /** 抓下来的东西的上限。数据集再大也不该整个塞进一次抓取。 */
 const MAX_FETCH_BYTES = 32 * 1024 * 1024;
 
-function apiKey(): string | undefined {
-  // 用户把 key 放在 ~/.zshenv 里,叫 CYPHER_TAVILY_API_KEY;也认通用的名字
-  return process.env.CYPHER_TAVILY_API_KEY ?? process.env.TAVILY_API_KEY;
+/**
+ * 搜索用的 key。
+ *
+ * 正式名字是 `MASTIC_TAVILY_API_KEY`,和其它配置一样带 `MASTIC_` 前缀。
+ * 后面两个是兼容写法:`TAVILY_API_KEY` 是这家服务自己的标准名,
+ * `CYPHER_TAVILY_API_KEY` 是本机 ~/.zshenv 里的旧名字 —— 留着只是让
+ * 已经配好的机器不至于当场坏掉,迁完就可以删这一行。
+ */
+export function tavilyKey(): string | undefined {
+  return (
+    process.env.MASTIC_TAVILY_API_KEY ??
+    process.env.TAVILY_API_KEY ??
+    process.env.CYPHER_TAVILY_API_KEY
+  );
 }
 
 /** 从 URL 里取一个能当文件名的短名,取不到就用序号。 */
@@ -49,7 +60,7 @@ const webSearchTool: Tool = {
     const query = args.query;
     if (typeof query !== "string" || query.trim() === "") throw new Error("`query` 必须是非空字符串");
 
-    const key = apiKey();
+    const key = tavilyKey();
     if (key === undefined) {
       throw new Error("没有搜到 Tavily 的 key。设 CYPHER_TAVILY_API_KEY(或 TAVILY_API_KEY)之后重试。");
     }
@@ -169,10 +180,3 @@ const fetchUrlTool: Tool = {
 };
 
 export const webTools: readonly Tool[] = [webSearchTool, fetchUrlTool];
-
-/** 扩展名 → 是不是数据文件。给后面的溯源检查用。 */
-export const DATA_EXTENSIONS = [".csv", ".tsv", ".json", ".jsonl", ".parquet", ".xlsx", ".txt", ".zip", ".gz", ".npz", ".npy"];
-
-export function looksLikeDataFile(path: string): boolean {
-  return DATA_EXTENSIONS.includes(extname(path).toLowerCase());
-}

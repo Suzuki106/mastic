@@ -46,6 +46,7 @@ export const STRUCTURAL_RULES = [
   "no_forbidden_words",
   "no_unresolved",
   "deliverable_matches_task",
+  "experiment_inputs_traceable",
 ] as const;
 export type StructuralRule = (typeof STRUCTURAL_RULES)[number];
 

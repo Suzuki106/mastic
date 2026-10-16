@@ -57,7 +57,12 @@ export const FORBIDDEN_TERMS: readonly string[] = [
  * 这两条是项目的脊梁,任何任务都绕不过去 ——
  * 即使任务书一个字没写,它们也永远是致命的。
  */
-export const ALWAYS_FATAL: readonly StructuralRule[] = ["evidence_for_every_claim", "no_forbidden_words"];
+export const ALWAYS_FATAL: readonly StructuralRule[] = [
+  "evidence_for_every_claim",
+  "no_forbidden_words",
+  // 数据来源是这个方向的核心:实验输入不能是模型自己编的
+  "experiment_inputs_traceable",
+];
 
 /** 致命规则集 = 脊梁两条 ∪ 任务书声明要的。 */
 export function fatalRules(task: TaskDoc | undefined): Set<StructuralRule> {

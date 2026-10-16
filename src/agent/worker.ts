@@ -1,4 +1,6 @@
+import { join } from "node:path";
 import { loadImages } from "../attachments.ts";
+import { addedOrChanged, signOutputs, snapshotDataFiles } from "../provenance.ts";
 import type { Config } from "../config.ts";
 import {
   parseReportDraft,
@@ -132,6 +134,8 @@ export interface WorkOptions {
 
 export interface WorkResult {
   report?: ReportDoc;
+  /** 动手前工作区里已有的数据文件(相对路径)。那些是用户的,不要求证明来源。 */
+  preexistingData: string[];
   draft?: ReportDraft;
   ledger: Ledger;
   usage: Usage | null;
@@ -205,6 +209,8 @@ function resolveDraft(draft: ReportDraft, ledger: Ledger): { report?: ReportDoc;
 
 export async function work(options: WorkOptions): Promise<WorkResult> {
   const ledger = createLedger();
+  // 动手之前先拍一张,结束时再拍一张 —— 差集就是这次产出的数据
+  const before = await snapshotDataFiles(options.workspace);
   const toolContext: ToolContext = {
     workspace: options.workspace,
     runRoot: options.runRoot,
@@ -272,11 +278,28 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
   });
 
   if (resolved !== null && accepted !== null) {
-    return { report: resolved, draft: accepted, ledger, usage: result.usage };
+    // 给这次**产出的数据**签字。
+    //
+    // 放在 work 里而不是调用方,因为调用方有两处(orchestrate 和 resume)——
+    // 同一件事写在两个地方,迟早会漏掉一个。这个教训今天已经吃过三次了。
+    //
+    // 产出靠前后快照的差集认,不靠 worker 声明:声明是它最可能忘、也最不该忘的事。
+    const produced = addedOrChanged(before, await snapshotDataFiles(options.workspace));
+    if (produced.length > 0) {
+      await signOutputs(
+        join(options.runRoot, "provenance.jsonl"),
+        options.task.id,
+        produced,
+        ledger.commands.map((command) => command.id),
+      );
+    }
+
+    return { report: resolved, draft: accepted, ledger, usage: result.usage, preexistingData: [...before.keys()] };
   }
 
   return {
     ledger,
+    preexistingData: [...before.keys()],
     usage: result.usage,
     failure:
       result.status === "steps"

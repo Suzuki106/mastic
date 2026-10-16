@@ -147,6 +147,11 @@ export async function reverify(
       task,
       report,
       workspace,
+      runRoot: paths.root,
+      // 重判旧报告时没有当时的台账,数据溯源这一项跳过 ——
+      // 它需要知道那一轮读过什么,而那个信息只活在 worker 的内存里
+      ledger: { commands: [], files: [] },
+      preexistingData: [],
       timeoutMs: config.commandTimeoutMs,
       onEvent: (detail) => onEvent?.(`  ${detail}`),
     });

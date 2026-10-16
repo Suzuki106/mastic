@@ -143,6 +143,9 @@ export async function resumeRun(
       task,
       report: worked.report,
       workspace,
+      runRoot: paths.root,
+      ledger: worked.ledger,
+      preexistingData: worked.preexistingData,
       timeoutMs: config.commandTimeoutMs,
       onEvent: (detail) => bus.emit({ kind: "task_step", task: task.id, detail }),
     });

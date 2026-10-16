@@ -144,6 +144,9 @@ async function runTask(
       task,
       report: worked.report,
       workspace: options.workspace,
+      runRoot: paths.root,
+      ledger: worked.ledger,
+      preexistingData: worked.preexistingData,
       timeoutMs: options.config.commandTimeoutMs,
       onEvent: (detail) => emit({ kind: "task_step", task: task.id, detail }),
     });

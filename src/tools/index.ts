@@ -4,6 +4,7 @@ import { recordCommand, recordFile, type Ledger } from "../ledger.ts";
 import { runCommand, sha256Text } from "../exec.ts";
 import type { ToolSchema } from "../llm.ts";
 import { displayPath, resolveInside } from "../paths.ts";
+import { looksLikeDataFile } from "../provenance.ts";
 import { webTools } from "./web.ts";
 
 export interface ToolContext {
@@ -91,6 +92,21 @@ const writeFileTool: Tool = {
     const path = requiredString(args, "path");
     const content = requiredString(args, "content");
     const full = resolveInside(ctx.workspace, path);
+
+    // **数据文件不能用这个工具写。**
+    //
+    // `write_file` 的内容来自模型 —— 拿它写一份 csv/jsonl,就等于凭空造了
+    // 一份"实验数据",而实验会因此什么都没测。这是造假最省事的路径,堵在这里。
+    //
+    // 数据要么用 fetch_url 从外部取,要么让代码算出来(跑脚本产出)。
+    // 配置、代码、笔记不受影响 —— 那些本来就不该被要求证明来源。
+    if (looksLikeDataFile(path)) {
+      throw new Error(
+        `\`${path}\` 是数据文件,不能用 write_file 直接写 —— 内容来自模型,不是一份有来源的数据。\n` +
+          `  要真实数据:用 fetch_url 从外部抓,或让用户提供。\n` +
+          `  要实验结果:写代码去算,用 run_bash 跑出来。`,
+      );
+    }
 
     // 写之前先看它在不在 —— files_changed 里的 created / modified 由这个决定
     let existed = true;

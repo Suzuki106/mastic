@@ -1,17 +1,28 @@
+import { join } from "node:path";
 import { replayEvidence } from "../check/replay.ts";
 import { runCommandChecks } from "../check/run.ts";
 import { decideStatus, type StatementVerdict, type Verdict } from "../check/verdict.ts";
 import type { Config } from "../config.ts";
+import type { LintFinding } from "../doc/lint.ts";
 import { fatalFindings, lintReport } from "../doc/lint.ts";
 import type { CheckReport, ReportDoc } from "../doc/report.ts";
 import type { StatementCheck, TaskDoc } from "../doc/task.ts";
+import type { Ledger } from "../ledger.ts";
 import { streamChat, type Usage } from "../llm.ts";
+import { resolveInside } from "../paths.ts";
+import { looksLikeDataFile, traceInput } from "../provenance.ts";
 
 export interface VerifyOptions {
   config: Config;
   task: TaskDoc;
   report: ReportDoc;
   workspace: string;
+  /** 本次运行的目录。溯源链在这儿。 */
+  runRoot: string;
+  /** worker 这一轮读写了什么。数据输入的溯源检查靠它。 */
+  ledger: Ledger;
+  /** 动手前工作区里已有的数据文件 —— 那些算用户提供的。 */
+  preexistingData: string[];
   timeoutMs: number;
   onEvent?: (detail: string) => void;
 }
@@ -146,7 +157,7 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
   options.onEvent?.(`重放 ${report.claims.reduce((sum, c) => sum + c.evidence.length, 0)} 条证据`);
   const replayOutcomes = await replayEvidence(report, { workspace, timeoutMs });
 
-  const findings = lintReport(report, task);
+  const findings = [...lintReport(report, task), ...(await checkDataInputs(options))];
   const fatalLint = fatalFindings(findings, task);
 
   const checks = statementChecks(task);
@@ -219,4 +230,44 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
       },
     },
   };
+}
+
+/**
+ * 实验输入必须可溯源。
+ *
+ * 这是整个数据自证方向的落点:一份数据文件被当输入用了,它就必须能沿溯源链
+ * 走回**外部抓取**或**用户提供**。走不回去的,是模型自己写出来的东西 ——
+ * 拿它跑实验等于什么都没测。
+ *
+ * 动手前工作区里本来就有的数据不算在内:那是用户放进仓库的,来源是用户。
+ * 只有**这一轮运行期间新出现**的数据文件才需要证明来路。
+ */
+async function checkDataInputs(options: VerifyOptions): Promise<LintFinding[]> {
+  const provenancePath = join(options.runRoot, "provenance.jsonl");
+  const preexisting = new Set(options.preexistingData);
+
+  const read = new Set(
+    options.ledger.files
+      .filter((file) => file.action === "read" && looksLikeDataFile(file.path))
+      .map((file) => file.path),
+  );
+
+  const findings: LintFinding[] = [];
+
+  for (const path of read) {
+    if (preexisting.has(path)) continue;
+
+    let verdict;
+    try {
+      verdict = await traceInput(provenancePath, resolveInside(options.workspace, path));
+    } catch {
+      continue; // 路径越界之类,不在这里报
+    }
+
+    if (verdict.traceable) continue;
+
+    findings.push({ rule: "experiment_inputs_traceable", where: path, detail: verdict.detail });
+  }
+
+  return findings;
 }
