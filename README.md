@@ -249,7 +249,7 @@ inputs:
 | `MASTIC_MAX_RETRIES` | `2` | 判 contradicted 后最多重派几次 |
 | `MASTIC_MAX_STEPS` | `30` | worker 单个任务最多几步 |
 | `MASTIC_COMMAND_TIMEOUT_MS` | `300000` | 验收命令超时 |
-| `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `120000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
+| `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `240000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
 | `MASTIC_VISION` | `1` | 模型收不收图。设 0 时界面不显示上传入口 |
 
 ## 项目结构

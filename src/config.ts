@@ -19,6 +19,10 @@ export interface Config {
    *
    * 是**空闲**超时不是总时长超时 —— 长回答本来就该慢慢吐,卡死的是那种
    * 一个字节都不再来的连接。没有这道闸,一次断流就能让 mastic run 永久挂住。
+   *
+   * 默认给得比较宽(4 分钟),因为这条计时**从发出请求那一刻就起算**,
+   * 而大 prompt 的 prefill 可能一分多钟才吐出第一个字节 —— 那是正常在算,
+   * 不是断流。给窄了会把正常的大上下文请求误杀,还看不出原因。
    */
   requestIdleTimeoutMs: number;
 }
@@ -74,7 +78,7 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     maxRetries: positiveInt("MASTIC_MAX_RETRIES", 2),
     maxSteps: positiveInt("MASTIC_MAX_STEPS", 30),
     commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
-    requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 120_000),
+    requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 240_000),
     vision: visionEnabled(),
     ...overrides,
   };

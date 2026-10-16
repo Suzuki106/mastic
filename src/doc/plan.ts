@@ -1,16 +1,27 @@
 import type { TaskDoc } from "./task.ts";
 
-/** 检查任务树的形状:编号唯一、依赖存在、无环。返回空数组表示没问题。 */
-export function validatePlan(tasks: TaskDoc[]): string[] {
+/**
+ * 检查任务树的形状:编号唯一、依赖存在、无环。返回空数组表示没问题。
+ *
+ * `known` 是**已经存在于这棵树里**的任务号。追加模式下,新任务的 depends_on
+ * 允许指向它们 —— 那是跨时间依赖的全部意义。
+ */
+export function validatePlan(tasks: TaskDoc[], known: Iterable<string> = []): string[] {
   const problems: string[] = [];
 
   if (tasks.length === 0) {
     return ["任务树是空的 —— 目标没有被拆成任何可执行的东西。"];
   }
 
+  const existing = new Set(known);
   const seen = new Set<string>();
   for (const task of tasks) {
     if (seen.has(task.id)) problems.push(`任务编号 \`${task.id}\` 重复了。`);
+    // 追加模式下最要命的一种错:把已有任务又写了一遍。
+    // 那不是"新增",那是覆盖 —— 旧任务书代表当时的决定,不能被改写。
+    if (existing.has(task.id)) {
+      problems.push(`\`${task.id}\` 已经在这棵树里了 —— 只输出**新增**的任务,不要重写已有的。`);
+    }
     seen.add(task.id);
   }
 
@@ -18,7 +29,7 @@ export function validatePlan(tasks: TaskDoc[]): string[] {
     for (const dependency of task.depends_on) {
       if (dependency === task.id) {
         problems.push(`\`${task.id}\` 依赖自己。`);
-      } else if (!seen.has(dependency)) {
+      } else if (!seen.has(dependency) && !existing.has(dependency)) {
         problems.push(`\`${task.id}\` 依赖了不存在的任务 \`${dependency}\`。`);
       }
     }

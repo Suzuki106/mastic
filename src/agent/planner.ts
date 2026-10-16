@@ -85,7 +85,10 @@ budget: { max_steps: 24 }
 - \`id\` 形如 T-001,全局唯一。
 - **每个字段都写在一行里**,尤其是 \`title\` 和 \`goal\`。YAML 遇到换行就解析不了,
   整份任务书会被打回。\`title\` 一句话就够(十几个字),要写的要求放进正文。
-  值里出现冒号或特殊符号时,用双引号包起来。
+- **值里出现 \`{\` \`}\` \`#\` \`:\` 或引号时,整个值用双引号包起来。**
+  这条最容易栽:YAML 看到 \`{\` 会当成 flow mapping 的开始,看到空格加 \`#\` 会当成注释。
+  而带正则的验收命令太常见了 —— \`grep -qE '^#{1,3}'\` 这种不包引号必然解析失败。
+  拿不准就包,包了不会有坏处。
 - \`deliverable\` 必须是 \`reports/<id>.md\`。
 - \`inputs\` 的 path 是相对工作目录的真实路径。
 - \`acceptance\` 至少一条;command 级的 \`expect\` 至少写一项判据
@@ -110,12 +113,47 @@ export interface PlanImage {
   dataUrl: string;
 }
 
+/** 已经在这棵树里的任务。追加模式下 planner 要看得到它们。 */
+export interface ExistingTask {
+  id: string;
+  title: string;
+  /** 裁定结果,或者"还没做"。 */
+  status: string;
+}
+
+/**
+ * 追加模式的附加规则。
+ *
+ * 核心一条:**只准加,不准改**。旧任务书写的是"当时我们决定这么验",
+ * 事后改它就是篡改记录 —— 想改就新增一个任务去覆盖它,让两条决定都留着。
+ * 这跟"事实只追加,视图去覆盖"是同一个原则。
+ */
+const APPEND_RULES = `
+
+## 这次是**追加**,不是从零开始
+
+这棵任务树里已经有任务了。你要做的是在它上面加,而不是重来:
+
+- **只输出新增的任务。** 已经做完的不要再列一遍 —— 那等于改写它。
+- 新任务的 \`id\` 不能和现有任何一个重复。
+- 需要的话,\`depends_on\` 可以引用现有任务号。跨时间的依赖是允许的,而且往往是必要的 ——
+  新任务改的很可能正是某个旧任务的产物,这条关系要写出来。
+- **旧决定你觉得不对,不要改它。** 新增一个任务去覆盖它,并在正文里写明它取代了哪一条。
+- 如果这次的要求其实不需要新任务(现状已经满足),就交一个空数组,并说明理由。
+
+**别把仓库重读一遍。** 上面那份任务清单已经告诉你哪些做完了。
+你需要的是"这次新增的要求涉及哪些文件",而不是把每个源文件读一遍 ——
+把二十几个文件塞进上下文,既慢又贵,而且对你的判断没有帮助。
+\`list_dir\` 看一眼结构,再按需读**这次真正相关的那几个**就够了。`;
+
 export interface PlanOptions {
   config: Config;
   goal: string;
   workspace: string;
   /** 用户随需求一起传上来的图。planner 看得见,才能把要求拆对。 */
   images?: PlanImage[];
+  /** 现有任务树。给了就是**追加模式**:只输出新增任务。 */
+  existing?: ExistingTask[];
   timeoutMs: number;
   maxOutputChars: number;
   /** 只能看、不能改的工具 —— planner 摸现场用。 */
@@ -127,12 +165,15 @@ export interface PlanOptions {
 export interface PlanResult {
   tasks: TaskDoc[];
   usage: Usage | null;
+  /** 追加模式下 planner 认为不用新增任务。 */
+  nothingToDo?: boolean;
   /** 没能产出合法任务树时的原因。 */
   failure?: string;
 }
 
 export async function plan(options: PlanOptions): Promise<PlanResult> {
-  let submitted: TaskDoc[] | null = null;
+  // 用对象装着:闭包里的赋值,TS 的控制流分析追不到,直接写变量会被收窄成 never
+  const captured: { tasks: TaskDoc[] | null } = { tasks: null };
 
   // planner 只摸现场不动手,台账留着不用 —— 但工具签名要求它存在
   const toolContext: ToolContext = {
@@ -143,30 +184,42 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
   };
 
   const images = options.images ?? [];
+  const existing = options.existing ?? [];
 
-  // 有图时 user 消息变成内容块数组:一段文字 + 若干张图。
-  // 路径也写在文字里 —— planner 要把它们照抄进任务书的 inputs,
-  // 否则 worker 拿不到图,只能看到"图里那个按钮"这种没头没尾的描述。
-  const user = images.length === 0
-    ? `目标:\n\n${options.goal}`
-    : ([
-        {
-          type: "text" as const,
-          text:
-            `目标:\n\n${options.goal}\n\n` +
-            `## 附图(${images.length} 张)\n\n` +
-            `路径相对本次运行的目录:\n` +
-            images.map((image) => `- ${image.path}`).join("\n") +
-            `\n\n需要用到图的那些任务,把对应用户写在任务书的 inputs 里:\n` +
-            `  - { kind: image, path: "attachments/1.png" }\n` +
-            `不写进去的话,worker 看不到这张图。`,
-        },
-        ...images.map((image) => ({ type: "image_url" as const, image_url: { url: image.dataUrl } })),
-      ]);
+  const lines = [`目标:\n\n${options.goal}`];
+
+  if (existing.length > 0) {
+    lines.push(
+      `## 现有任务树(${existing.length} 个,不要重写它们)\n\n` +
+        existing.map((task) => `- ${task.id}  ${task.title}  → ${task.status}`).join("\n"),
+    );
+  }
+
+  if (images.length > 0) {
+    lines.push(
+      `## 附图(${images.length} 张)\n\n` +
+        `路径相对本次运行的目录:\n` +
+        images.map((image) => `- ${image.path}`).join("\n") +
+        `\n\n需要用到图的那些任务,把对应用户写在任务书的 inputs 里:\n` +
+        `  - { kind: image, path: "attachments/1.png" }\n` +
+        `不写进去的话,worker 看不到这张图。`,
+    );
+  }
+
+  const brief = lines.join("\n\n");
+
+  // 有图时 user 消息变成内容块数组:一段文字 + 若干张图
+  const user =
+    images.length === 0
+      ? brief
+      : [
+          { type: "text" as const, text: brief },
+          ...images.map((image) => ({ type: "image_url" as const, image_url: { url: image.dataUrl } })),
+        ];
 
   const result = await runToolLoop({
     config: options.config,
-    system: SYSTEM,
+    system: existing.length > 0 ? SYSTEM + APPEND_RULES : SYSTEM,
     user,
     tools: [...options.discoveryTools, PLAN_TOOL],
     toolContext,
@@ -176,8 +229,14 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
 
     onTerminal: (args) => {
       const raw = args.tasks;
-      if (!Array.isArray(raw) || raw.length === 0) {
-        return "`tasks` 必须是非空数组,每项是一份完整的任务文档字符串。";
+      if (!Array.isArray(raw)) {
+        return "`tasks` 必须是数组,每项是一份完整的任务文档字符串。";
+      }
+
+      // 空数组在**追加模式**下是合法结论("现状已经满足,不用加任务");
+      // 全新规划时才是失败 —— 那说明目标根本没被拆开。
+      if (raw.length === 0 && existing.length === 0) {
+        return "`tasks` 不能为空 —— 目标没有被拆成任何可执行的东西。";
       }
 
       const errors: string[] = [];
@@ -196,8 +255,13 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
         tasks.push(task);
       });
 
-      if (errors.length === 0) {
-        const planProblems = validatePlan(tasks);
+      // 追加模式下「现状已经满足、不用加任务」是合法结论,不是空手而归。
+      // 全新规划时交空数组才是失败 —— 那说明目标根本没被拆开。
+      const nothingToDo = existing.length > 0 && tasks.length === 0;
+
+      if (errors.length === 0 && !nothingToDo) {
+        // 追加模式下,新任务的 depends_on 允许指向已有任务
+        const planProblems = validatePlan(tasks, existing.map((task) => task.id));
         if (planProblems.length > 0) {
           return `任务树有问题:\n  - ${planProblems.join("\n  - ")}`;
         }
@@ -207,12 +271,19 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
         return `有 ${errors.length} 处问题,改完再交:\n\n${errors.join("\n\n")}`;
       }
 
-      submitted = tasks;
+      captured.tasks = tasks;
       return undefined;
     },
   });
 
-  if (submitted !== null) return { tasks: submitted, usage: result.usage };
+  const accepted = captured.tasks;
+  if (accepted !== null) {
+    return {
+      tasks: accepted,
+      usage: result.usage,
+      ...(existing.length > 0 && accepted.length === 0 ? { nothingToDo: true } : {}),
+    };
+  }
 
   return {
     tasks: [],

@@ -2,12 +2,18 @@ import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type 
 import type { AttachedImage } from "../api";
 import { AddImageIcon, ArrowIcon, RemoveIcon, RunningIcon } from "../icons";
 
+export type ComposerMode = "new" | "continue";
+
 export interface ComposerProps {
   onSubmit: (goal: string, images: AttachedImage[]) => void;
   busy: boolean;
   error: string | null;
   /** 当前模型收不收图。不收就不显示入口 —— 点了必然失败的东西不该摆出来。 */
   vision: boolean;
+  mode: ComposerMode;
+  onMode: (mode: ComposerMode) => void;
+  /** 当前选中的运行,用来在"接着做"上显示是接着哪一次。没有就只能新建。 */
+  runId: string | null;
 }
 
 /** 和后端保持一致,免得本地放行、发过去才被拒。 */
@@ -33,7 +39,7 @@ async function toAttachment(file: File): Promise<AttachedImage | { error: string
   return { name: file.name === "" ? "粘贴的图片" : file.name, dataUrl };
 }
 
-export function Composer({ onSubmit, busy, error, vision }: ComposerProps) {
+export function Composer({ onSubmit, busy, error, vision, mode, onMode, runId }: ComposerProps) {
   const [goal, setGoal] = useState("");
   const [images, setImages] = useState<AttachedImage[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
@@ -106,9 +112,31 @@ export function Composer({ onSubmit, busy, error, vision }: ComposerProps) {
   };
 
   const shown = localError ?? error;
+  const continuing = mode === "continue" && runId !== null;
+
+  const modeTab = (on: boolean): string =>
+    `rounded-md px-2 py-0.5 text-[11px] transition-colors ${
+      on ? "bg-slate-100 font-medium text-slate-900" : "text-faint hover:text-slate-700"
+    }`;
 
   return (
     <div className="border-t border-line bg-white px-5 py-3">
+      {/* 第二次输入到底是"接着说"还是"另起一次",必须说清楚 ——
+          两者差别很大:一个在旧任务树上追加,一个从零重新理解这个项目。 */}
+      {runId !== null && (
+        <div className="mb-2 flex items-center gap-1">
+          <button className={modeTab(continuing)} onClick={() => onMode("continue")}>
+            接着 {runId.slice(-6)} 做
+          </button>
+          <button className={modeTab(!continuing)} onClick={() => onMode("new")}>
+            新建一次运行
+          </button>
+          <span className="ml-1 text-[11px] text-faint">
+            {continuing ? "在现有任务树上追加,不做的事不会重做" : "从零重新规划一次,旧的原样留着"}
+          </span>
+        </div>
+      )}
+
       {shown !== null && (
         <p className="mb-2 rounded-lg border border-contradicted/30 bg-contradicted/5 px-3 py-2 text-[12.5px] text-contradicted">
           {shown}
@@ -181,7 +209,9 @@ export function Composer({ onSubmit, busy, error, vision }: ComposerProps) {
             onChange={(event) => setGoal(event.target.value)}
             onKeyDown={onKeyDown}
             onPaste={onPaste}
-            placeholder={busy ? "正在跑…" : "说清楚要做什么。Enter 开始,Shift+Enter 换行。"}
+            placeholder={
+            busy ? "正在跑…" : continuing ? "接着做什么?Enter 开始" : "说清楚要做什么。Enter 开始,Shift+Enter 换行。"
+          }
             className="max-h-[132px] flex-1 resize-none border-0 bg-transparent py-1 text-[13.5px] leading-relaxed text-slate-900 outline-none placeholder:text-faint disabled:opacity-60"
           />
 

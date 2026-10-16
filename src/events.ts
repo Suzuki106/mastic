@@ -27,6 +27,28 @@ export function eventKindOf(loopKind: string): EventKind {
   return "task_step";
 }
 
+/**
+ * 工具循环的事件 → 事件流的事件。
+ *
+ * 收在这里是因为已经有**两处**转发点了,而两处都曾经把 kind 丢掉、一律写成
+ * `task_step` —— 后果是"正在想什么"进了日志变成一条条残片,而"进行中的模型
+ * 调用"在界面上认不出来。同一件事只有一个实现,才不会再漏第二遍。
+ */
+export function runEventOf(
+  loopKind: string,
+  task: string,
+  detail: string,
+): Omit<RunEvent, "seq" | "at" | "run"> {
+  const kind = eventKindOf(loopKind);
+  return {
+    kind,
+    task,
+    detail,
+    // 推理摘录是实时指标,不是记录 —— 不落盘
+    ...(kind === "thinking" ? { transient: true } : {}),
+  };
+}
+
 export interface RunEvent {
   /** 单调递增 —— 前端断线重连时靠它续上。 */
   seq: number;

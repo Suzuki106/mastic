@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   cancelRun,
+  continueRun,
   fetchRun,
   fetchRuns,
   fetchWorkspaces,
@@ -13,7 +14,7 @@ import {
   type RunSummary,
   type TaskData,
 } from "./api";
-import { Composer } from "./components/Composer";
+import { Composer, type ComposerMode } from "./components/Composer";
 import { EventStream } from "./components/EventStream";
 import { StatusBadge } from "./components/StatusBadge";
 import { TaskSection, anchorId } from "./components/TaskSection";
@@ -35,6 +36,7 @@ export default function App() {
   const [workspace, setWorkspace] = useState<string>("");
   const [knownWorkspaces, setKnownWorkspaces] = useState<string[]>([]);
   const [vision, setVision] = useState(false);
+  const [mode, setMode] = useState<ComposerMode>("new");
 
   const { events, live } = useEventStream(runId);
   const lastSeq = useRef(0);
@@ -174,10 +176,26 @@ export default function App() {
     return () => observer.disconnect();
   }, [tasks, view]);
 
+  /**
+   * 选中某次运行后,默认就是"接着说"。
+   *
+   * 用户的预期是延续 —— 上一句刚说完,下一句自然是在同一件事上往下走,
+   * 而不是换个人从零接手。想另起一次,输入框上方有开关。
+   */
+  useEffect(() => {
+    setMode(runId === null ? "new" : "continue");
+  }, [runId]);
+
   const start = async (goal: string, images: AttachedImage[]): Promise<void> => {
     setError(null);
     setBusy(true);
     try {
+      if (mode === "continue" && runId !== null) {
+        await continueRun(runId, goal, images);
+        await refreshRuns();
+        return;
+      }
+
       const { runId: created } = await startRun(goal, images);
       setActive(null);
       setRunId(created);
@@ -309,6 +327,9 @@ export default function App() {
             busy={isRunning}
             error={error}
             vision={vision}
+            mode={mode}
+            onMode={setMode}
+            runId={runId}
           />
         </section>
 

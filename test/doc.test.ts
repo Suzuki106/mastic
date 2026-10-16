@@ -100,6 +100,62 @@ budget: { max_steps: 10 }
     assert.ok(validatePlan([make("T-001", ["T-999"])]).some((p) => p.includes("不存在")));
   });
 
+  /**
+   * 追加模式:新任务的 depends_on 允许指向**已有的**任务号 ——
+   * 那是跨时间依赖的全部意义,不该被判成"依赖不存在"。
+   */
+  it("追加时,新任务可以依赖已有的任务", () => {
+    const fresh = parseTaskDoc(`---
+id: T-008
+title: 加乘客信息系统
+goal: 在现有仿真上加 PIS
+depends_on: [T-003]
+deliverable: reports/T-008.md
+acceptance:
+  - { kind: command, run: "python3 -m unittest", expect: { exit_code: 0 } }
+budget: { max_steps: 30 }
+---
+`).task!;
+
+    assert.deepEqual(validatePlan([fresh], ["T-001", "T-002", "T-003"]), []);
+  });
+
+  /**
+   * 追加模式最要命的一种错:把已有任务又写了一遍。
+   * 那不是"新增",是覆盖 —— 旧任务书写的是当时决定怎么验,不能被改写。
+   */
+  it("追加时,重写已有任务号会被拦下", () => {
+    const rewrite = parseTaskDoc(`---
+id: T-003
+title: 改一下验收标准
+goal: 重写
+deliverable: reports/T-003.md
+acceptance:
+  - { kind: command, run: "true", expect: { exit_code: 0 } }
+budget: { max_steps: 10 }
+---
+`).task!;
+
+    const problems = validatePlan([rewrite], ["T-001", "T-002", "T-003"]);
+    assert.ok(problems.some((problem) => problem.includes("已经在这棵树里")));
+  });
+
+  it("追加时依赖一个哪儿都没有的号,照样拦下", () => {
+    const fresh = parseTaskDoc(`---
+id: T-008
+title: 新任务
+goal: 空
+depends_on: [T-999]
+deliverable: reports/T-008.md
+acceptance:
+  - { kind: command, run: "true", expect: { exit_code: 0 } }
+budget: { max_steps: 10 }
+---
+`).task!;
+
+    assert.ok(validatePlan([fresh], ["T-001"]).some((p) => p.includes("不存在")));
+  });
+
   // 回归:曾是拿"层数"跟"任务数"比来判断环,于是每个正常的多层 DAG 都被冤枉。
   // 这个形状是真实跑出来的 —— planner 拆出两个独立任务加一个收口任务。
   it("菱形依赖(三层四任务)不算环", () => {

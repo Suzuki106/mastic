@@ -7,6 +7,7 @@ import { parseDoc } from "./doc/frontmatter.ts";
 import { readEvents, type RunEvent } from "./events.ts";
 import { orchestrate } from "./orchestrator.ts";
 import { resolveInside } from "./paths.ts";
+import { continueRun } from "./resume.ts";
 import { listRunIds, newRunId, readRunDoc, runPaths, type RunPaths, type RunDoc } from "./workspace.ts";
 import { loadWorkspaceRegistry, type WorkspaceRegistry } from "./workspaces.ts";
 
@@ -97,6 +98,34 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json; charset=utf-8" },
   });
+}
+
+/**
+ * 校验并收敛请求里的图片。
+ *
+ * 在这里就拦掉 —— 等运行起来了才发现图是坏的,用户已经白等一场。
+ */
+function readImages(raw: unknown): { images: IncomingImage[] } | { error: string } {
+  const list = Array.isArray(raw) ? raw : [];
+  if (list.length > MAX_IMAGES) return { error: `最多带 ${MAX_IMAGES} 张图。` };
+
+  const images: IncomingImage[] = [];
+  for (const [index, item] of list.entries()) {
+    if (typeof item !== "object" || item === null) {
+      return { error: `第 ${index + 1} 张图格式不对。` };
+    }
+    const { dataUrl, name } = item as { dataUrl?: unknown; name?: unknown };
+    if (typeof dataUrl !== "string") {
+      return { error: `第 ${index + 1} 张图缺 dataUrl。` };
+    }
+    const parsed = parseDataUrl(dataUrl);
+    if ("error" in parsed) {
+      return { error: `第 ${index + 1} 张图:${parsed.error}` };
+    }
+    images.push({ dataUrl, ...(typeof name === "string" ? { name } : {}) });
+  }
+
+  return { images };
 }
 
 async function readJsonBody(request: Request): Promise<Record<string, unknown>> {
@@ -286,6 +315,48 @@ function makeRunManager(workspaces: WorkspaceRegistry) {
       return { runId };
     },
 
+    /**
+     * 往已有任务树上追加并执行。
+     *
+     * 复用同一个 runId —— 这是"接着说",不是"另起一次"。跑完的旧任务原样留着,
+     * 新的追加在后面。
+     */
+    continueRun(runId: string, goal: string, images: IncomingImage[]): { ok: true } | { error: string } {
+      const current = active.get(runId);
+      if (current !== undefined && !current.finished) {
+        return { error: "这次运行还在跑,等它结束或者先取消。" };
+      }
+
+      try {
+        config ??= loadConfig();
+      } catch (error) {
+        return { error: error instanceof Error ? error.message : String(error) };
+      }
+
+      const controller = new AbortController();
+      const entry: ActiveRun = {
+        runId,
+        goal,
+        controller,
+        startedAt: new Date().toISOString(),
+        finished: false,
+        live: [],
+      };
+      active.set(runId, entry);
+
+      void continueRun(config, workspaces.current(), runId, goal, images, (event) => entry.live.push(event))
+        .then((result) => {
+          entry.finished = true;
+          if (result.nothingToDo) entry.error = "planner 认为现状已经满足,没有新增任务。";
+        })
+        .catch((error: unknown) => {
+          entry.finished = true;
+          entry.error = error instanceof Error ? error.message : String(error);
+        });
+
+      return { ok: true };
+    },
+
     cancel(runId: string): boolean {
       const run = active.get(runId);
       if (run === undefined || run.finished) return false;
@@ -323,27 +394,10 @@ async function route(
       const goal = typeof body.goal === "string" ? body.goal.trim() : "";
       if (goal === "") return json({ error: "要跑什么?goal 不能为空。" }, 400);
 
-      // 图片在这里就校验掉 —— 等运行起来了才发现图是坏的,用户已经白等一场
-      const raw = Array.isArray(body.images) ? body.images : [];
-      if (raw.length > MAX_IMAGES) return json({ error: `最多带 ${MAX_IMAGES} 张图。` }, 400);
+      const images = readImages(body.images);
+      if ("error" in images) return json(images, 400);
 
-      const images: IncomingImage[] = [];
-      for (const [index, item] of raw.entries()) {
-        if (typeof item !== "object" || item === null) {
-          return json({ error: `第 ${index + 1} 张图格式不对。` }, 400);
-        }
-        const { dataUrl, name } = item as { dataUrl?: unknown; name?: unknown };
-        if (typeof dataUrl !== "string") {
-          return json({ error: `第 ${index + 1} 张图缺 dataUrl。` }, 400);
-        }
-        const parsed = parseDataUrl(dataUrl);
-        if ("error" in parsed) {
-          return json({ error: `第 ${index + 1} 张图:${parsed.error}` }, 400);
-        }
-        images.push({ dataUrl, ...(typeof name === "string" ? { name } : {}) });
-      }
-
-      const result = runs.start(goal, images);
+      const result = runs.start(goal, images.images);
       if ("error" in result) return json(result, 400);
       return json(result, 201);
     }
@@ -386,7 +440,7 @@ async function route(
       }
     }
 
-    const match = /^\/api\/runs\/([^/]+)(\/events|\/cancel)?$/.exec(path);
+    const match = /^\/api\/runs\/([^/]+)(\/events|\/cancel|\/continue)?$/.exec(path);
     if (match?.[1] !== undefined) {
       const id = decodeURIComponent(match[1]);
       const workspace = workspaces.current();
@@ -405,6 +459,20 @@ async function route(
       if (match[2] === "/cancel") {
         if (request.method !== "POST") return json({ error: "用 POST" }, 405);
         return json({ cancelled: runs.cancel(id) });
+      }
+
+      if (match[2] === "/continue") {
+        if (request.method !== "POST") return json({ error: "用 POST" }, 405);
+
+        const body = await readJsonBody(request);
+        const goal = typeof body.goal === "string" ? body.goal.trim() : "";
+        if (goal === "") return json({ error: "要接着做什么?goal 不能为空。" }, 400);
+
+        const images = readImages(body.images);
+        if ("error" in images) return json(images, 400);
+
+        const result = runs.continueRun(id, goal, images.images);
+        return "error" in result ? json(result, 400) : json(result, 202);
       }
 
       const payload = (await collectRun(paths)) as Record<string, unknown>;

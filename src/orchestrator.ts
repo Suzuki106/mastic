@@ -6,7 +6,7 @@ import type { Config } from "./config.ts";
 import { topoLayers } from "./doc/plan.ts";
 import type { ReportDoc, ReportStatus } from "./doc/report.ts";
 import type { TaskDoc } from "./doc/task.ts";
-import { createEventBus, eventKindOf, type RunEvent } from "./events.ts";
+import { createEventBus, runEventOf, type RunEvent } from "./events.ts";
 import type { LoopEvent } from "./agent/loop.ts";
 import type { Usage } from "./llm.ts";
 import { discoveryTools } from "./tools/index.ts";
@@ -89,25 +89,6 @@ export async function runPool<T>(
   await Promise.all(runners);
 }
 
-/**
- * 把工具循环里的事件转成事件流的形状。
- *
- * thinking 标成 transient:推理摘录只推给正在看的界面,不写进日志 ——
- * 它是"此刻在想什么"的实时指标,不是这次运行的记录。
- */
-function toRunEvent(
-  event: LoopEvent,
-  task: string,
-): Omit<RunEvent, "seq" | "at" | "run"> {
-  const kind = eventKindOf(event.kind);
-  return {
-    kind,
-    task,
-    detail: event.detail,
-    ...(kind === "thinking" ? { transient: true } : {}),
-  };
-}
-
 /** 一个任务做完了没 —— 只有这两个状态算「过了」,其余都要拦下游。 */
 function passed(outcome: TaskOutcome | undefined): boolean {
   return outcome?.status === "verified" || outcome?.status === "unverified";
@@ -146,7 +127,7 @@ async function runTask(
       timeoutMs: options.config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
       ...(findings === undefined ? {} : { findings }),
-      onEvent: (event) => emit(toRunEvent(event, task.id)),
+      onEvent: (event) => emit(runEventOf(event.kind, task.id, event.detail)),
     });
 
     usage = addUsage(usage, worked.usage);
@@ -292,7 +273,7 @@ async function runOrchestration(
     maxSteps: options.planSteps ?? 30,
     // kind 要原样带过去 —— 尤其 thinking:"还在请求模型"和"读完一个文件"
     // 在前端是两种东西,压成一种就画不出进行中的状态了
-    onEvent: (event) => bus.emit(toRunEvent(event, "planner")),
+    onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),
   });
 
   const plannerUsage = addUsage(emptyUsage, planned.usage);

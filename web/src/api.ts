@@ -143,6 +143,26 @@ export async function startRun(goal: string, images: AttachedImage[] = []): Prom
   return { runId: payload.runId };
 }
 
+/**
+ * 往已有任务树上追加任务并执行。
+ *
+ * 和 startRun 的区别是它**不新开一次运行** —— 旧任务原样留着,新的追加在后面,
+ * 新任务的 depends_on 还能指回旧任务。
+ */
+export async function continueRun(
+  runId: string,
+  goal: string,
+  images: AttachedImage[] = [],
+): Promise<void> {
+  const response = await fetch(`/api/runs/${encodeURIComponent(runId)}/continue`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ goal, ...(images.length === 0 ? {} : { images }) }),
+  });
+  const payload = (await response.json()) as { error?: string };
+  if (!response.ok) throw new Error(payload.error ?? `HTTP ${response.status}`);
+}
+
 export async function cancelRun(runId: string): Promise<void> {
   await fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
 }
