@@ -1,6 +1,12 @@
-# mastic
+<p align="center">
+  <img src="assets/logo.png" alt="mastic" width="200">
+</p>
 
-> 文档驱动的多 agent —— 让 agent 的产出变成**可验收、可追溯、可反驳**的文档。
+<h1 align="center">mastic</h1>
+
+<p align="center">
+文档驱动的多 agent —— 让 agent 的产出变成<strong>可验收、可追溯、可反驳</strong>的文档。
+</p>
 
 ## 它解决什么
 
