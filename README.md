@@ -27,7 +27,7 @@ mastic run "实现 src/slugify.js,让 test/slugify.test.js 全部通过"
 
 ## 核心机制
 
-### 一、指标 = 可执行谓词,分三级下沉
+### 一、指标 = 可执行谓词,分四级下沉
 
 "给一切任务都定出指标"不是靠发明一个万能指标,而是靠逐级下沉。
 每个任务恰好落在某一级,级别写进任务书 —— 前端据此显示"这个任务靠跑 X 验"
@@ -35,9 +35,25 @@ mastic run "实现 src/slugify.js,让 test/slugify.test.js 全部通过"
 
 | 级别 | 形式 | 判定 |
 |---|---|---|
+| `reproducible` | 把实验**再做一遍**,比对结果 | 两次运行的输出逐项对比(数值可带容差) |
 | `command` | `run: "npm test", expect: {exit_code: 0}` | 真跑,看退出码 / 解析 stdout |
 | `structural` | `require: [evidence_for_every_claim, ...]` | 文档结构的机械校验 |
 | `statement` | 一条可证伪的陈述 | 要么给出证据,要么显式标为未验证 |
+
+**`reproducible` 是复现论文才需要的那一级。** `command` 只证明"这一次跑出来是这个数";
+`reproducible` 证明"这套输入和代码再做一遍还能得出同一个结果"——
+
+```yaml
+- kind: reproducible
+  run: "python train.py --seed 42 --out {out}"
+  runs: 2
+  compare:
+    - { path: "{out}/metrics.json", mode: numeric, tolerance: 1e-6 }
+```
+
+`{out}` 每遍换成各自的目录,两次不会互相覆盖。`mode: exact` 逐字节比,
+`numeric` 按数值比。实验本来就不可能完全可复现时照样写这条 ——
+判成 `unverified` 本身就是结论:"这套实验只在多大程度上可复现"。
 
 ### 二、反 mock 的四道闸
 

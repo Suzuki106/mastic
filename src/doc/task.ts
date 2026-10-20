@@ -18,7 +18,7 @@ import {
  * 每个任务恰好落在某一级。级别本身就是任务书的一部分,前端据此显示
  * 「这个任务靠跑 X 验」还是「这个任务是一条待证陈述」。
  */
-export const CHECK_KINDS = ["command", "structural", "statement"] as const;
+export const CHECK_KINDS = ["command", "structural", "statement", "reproducible"] as const;
 export type CheckKind = (typeof CHECK_KINDS)[number];
 
 /**
@@ -48,6 +48,7 @@ export const STRUCTURAL_RULES = [
   "deliverable_matches_task",
   "experiment_inputs_traceable",
   "data_dir_untouched",
+  "signed_artifacts_unchanged",
 ] as const;
 export type StructuralRule = (typeof STRUCTURAL_RULES)[number];
 
@@ -56,13 +57,41 @@ export interface StructuralCheck {
   require: StructuralRule[];
 }
 
+/**
+ * reproducible 级:把实验**再做一遍**,比对结果。
+ *
+ * 这是论文复现真正要的那件事。`command` 级只是"跑一遍看着对",
+ * 那证明不了任何可复现性 —— 它只证明这一次跑出来是这个数。
+ *
+ * `{out}` 会被替换成每次运行各自的输出目录(`repro-1`、`repro-2`……),
+ * 所以两次运行不会互相覆盖。
+ */
+export interface ReproducibleCompare {
+  /** 要比的文件,可含 `{out}`。 */
+  path: string;
+  /** exact 逐字节;numeric 按数值比,允许容差。 */
+  mode: "exact" | "numeric";
+  /** mode = numeric 时的相对/绝对容差,默认 1e-6。 */
+  tolerance?: number;
+}
+
+export interface ReproducibleCheck {
+  kind: "reproducible";
+  label?: string;
+  run: string;
+  /** 跑几遍,至少 2。 */
+  runs: number;
+  cwd?: string;
+  compare: ReproducibleCompare[];
+}
+
 /** statement 级:产物无法机械判定时,退到「一条可证伪的陈述」。 */
 export interface StatementCheck {
   kind: "statement";
   statement: string;
 }
 
-export type AcceptanceCheck = CommandCheck | StructuralCheck | StatementCheck;
+export type AcceptanceCheck = CommandCheck | StructuralCheck | StatementCheck | ReproducibleCheck;
 
 export interface TaskInput {
   /** image 是用户在界面上传的图,路径相对 run 目录(attachments/ 下)。 */
@@ -170,6 +199,56 @@ function parseAcceptance(raw: unknown[], errors: Problems): AcceptanceCheck[] {
         run,
         expect: parseExpect(item.expect, errors, where),
       };
+      const label = readString(item, "label", errors, { required: false });
+      if (label !== undefined) check.label = label;
+      const cwd = readString(item, "cwd", errors, { required: false });
+      if (cwd !== undefined) check.cwd = cwd;
+      return [check];
+    }
+
+    if (kind === "reproducible") {
+      const run = readString(item, "run", errors);
+      if (run === undefined) {
+        errors.push(`${where} 是 reproducible 级,必须给 \`run\`。`);
+        return [];
+      }
+
+      if (!run.includes("{out}")) {
+        errors.push(
+          `${where} 的 \`run\` 里必须有 \`{out}\` —— 两次运行得写到不同目录,` +
+            `否则后一次覆盖前一次,比对就成了自己比自己。`,
+        );
+      }
+
+      const runs = readInt(item, "runs", errors, 2);
+      if (runs < 2) {
+        errors.push(`${where} 的 \`runs\` 至少是 2 —— 只跑一遍不叫复现。`);
+      }
+
+      const compare = readArray(item, "compare", errors, { required: true }).flatMap(
+        (raw, index): ReproducibleCompare[] => {
+          const at = `${where}.compare[${index}]`;
+          if (!isRecord(raw)) {
+            errors.push(`${at} 必须是 key: value 块,收到 ${describe(raw)}`);
+            return [];
+          }
+          const path = readString(raw, "path", errors);
+          if (path === undefined) return [];
+          const mode = readEnum(raw, "mode", errors, ["exact", "numeric"] as const, "exact") ?? "exact";
+          const tolerance = readInt(raw, "tolerance", errors, 0);
+          return [{
+            path,
+            mode,
+            ...(tolerance > 0 ? { tolerance } : {}),
+          }];
+        },
+      );
+
+      if (compare.length === 0 && !errors.some((e) => e.startsWith(`${where}.compare`))) {
+        errors.push(`${where} 的 \`compare\` 是空的 —— 不比东西,怎么知道做出来一样?`);
+      }
+
+      const check: ReproducibleCheck = { kind: "reproducible", run, runs, compare };
       const label = readString(item, "label", errors, { required: false });
       if (label !== undefined) check.label = label;
       const cwd = readString(item, "cwd", errors, { required: false });
@@ -290,6 +369,17 @@ function acceptanceToData(check: AcceptanceCheck): Record<string, unknown> {
   }
   if (check.kind === "structural") {
     return { kind: "structural", require: check.require };
+  }
+  if (check.kind === "reproducible") {
+    const data: Record<string, unknown> = {
+      kind: "reproducible",
+      run: check.run,
+      runs: check.runs,
+      compare: check.compare,
+    };
+    if (check.label !== undefined) data.label = check.label;
+    if (check.cwd !== undefined) data.cwd = check.cwd;
+    return data;
   }
   return { kind: "statement", statement: check.statement };
 }

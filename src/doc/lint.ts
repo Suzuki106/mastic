@@ -64,6 +64,8 @@ export const ALWAYS_FATAL: readonly StructuralRule[] = [
   "experiment_inputs_traceable",
   // 原始数据区只读 —— 往那儿塞东西等于伪造观测
   "data_dir_untouched",
+  // 签过字的产出在验证时被动过 —— 那之后所有引用它的证据都不作数
+  "signed_artifacts_unchanged",
 ];
 
 /** 致命规则集 = 脊梁两条 ∪ 任务书声明要的。 */

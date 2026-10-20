@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { replayEvidence } from "../check/replay.ts";
+import { runReproducibleChecks } from "../check/reproduce.ts";
 import { runCommandChecks } from "../check/run.ts";
 import { decideStatus, type StatementVerdict, type Verdict } from "../check/verdict.ts";
 import type { Config } from "../config.ts";
@@ -10,7 +11,8 @@ import type { StatementCheck, TaskDoc } from "../doc/task.ts";
 import type { Ledger } from "../ledger.ts";
 import { streamChat, type Usage } from "../llm.ts";
 import { resolveInside } from "../paths.ts";
-import { DATA_DIR, listFiles, looksLikeDataFile, traceInput } from "../provenance.ts";
+import { sha256File } from "../exec.ts";
+import { DATA_DIR, listFiles, looksLikeDataFile, readProvenance, traceInput } from "../provenance.ts";
 
 export interface VerifyOptions {
   config: Config;
@@ -155,12 +157,19 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
   });
 
   options.onEvent?.(`重放 ${report.claims.reduce((sum, c) => sum + c.evidence.length, 0)} 条证据`);
+  const reproducibleOutcomes = await runReproducibleChecks(task, {
+    workspace,
+    timeoutMs,
+    onRun: (command, index, result) =>
+      options.onEvent?.(`  第 ${index} 遍 ${command} → 退出码 ${result.exitCode}`),
+  });
   const replayOutcomes = await replayEvidence(report, { workspace, timeoutMs });
 
   const findings = [
     ...lintReport(report, task),
     ...(await checkDataInputs(options)),
     ...(await checkDataDir(options)),
+    ...(await checkSignedArtifacts(options)),
   ];
   const fatalLint = fatalFindings(findings, task);
 
@@ -170,6 +179,7 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
 
   const verdict = decideStatus({
     commandOutcomes,
+    reproducibleOutcomes,
     replayOutcomes,
     fatalLint,
     statementVerdicts,
@@ -207,6 +217,12 @@ export async function verify(options: VerifyOptions): Promise<VerifyResult> {
         ...(outcome.verdict === "drifted" ? { caveat: true } : {}),
       };
     }),
+    ...reproducibleOutcomes.map((outcome) => ({
+      kind: "reproducible" as const,
+      label: outcome.check.label ?? outcome.check.run,
+      passed: outcome.passed,
+      detail: outcome.detail,
+    })),
     ...statementVerdicts.map((item) => ({
       kind: "statement" as const,
       label: item.statement,
@@ -302,6 +318,52 @@ async function checkDataDir(options: VerifyOptions): Promise<LintFinding[]> {
       where: `${DATA_DIR}/${relative}`,
       detail: `原始数据区里出现了没有来源的文件。${verdict.detail}`,
     });
+  }
+
+  return findings;
+}
+
+/**
+ * 签过字的产出,现在还是不是那个哈希。
+ *
+ * 证据重放只能证明"这条命令对现在磁盘上那份文件是可复现的"。它**没有原件
+ * 可以参照** —— 如果文件在记录之前就被改了,重放每次都"一致",因为基准本身
+ * 就是改过的。
+ *
+ * 签名补的就是这个参照:产出那一刻的哈希进了链。所以验证时把它重算一遍,
+ * 对不上就说明这份数据在签字之后被动过,之后所有引用它的证据都不作数。
+ *
+ * 边界仍在:签名记录的是"任务结束时是什么",不是"命令产出了什么"。任务进行
+ * 期间、命令产出与签字之间的修改,这里查不出来。
+ */
+async function checkSignedArtifacts(options: VerifyOptions): Promise<LintFinding[]> {
+  const chain = await readProvenance(join(options.runRoot, "provenance.jsonl"));
+  const findings: LintFinding[] = [];
+
+  for (const entry of chain) {
+    if (entry.kind !== "derived" || entry.path === undefined || entry.sha256 === undefined) continue;
+
+    let actual: string;
+    try {
+      actual = await sha256File(resolveInside(options.workspace, entry.path));
+    } catch {
+      findings.push({
+        rule: "signed_artifacts_unchanged",
+        where: entry.path,
+        detail: `签过字的产出不见了(签名 #${entry.seq})。`,
+      });
+      continue;
+    }
+
+    if (actual !== entry.sha256) {
+      findings.push({
+        rule: "signed_artifacts_unchanged",
+        where: entry.path,
+        detail:
+          `产出后被动过:签名 #${entry.seq} 记的是 ${entry.sha256.slice(0, 12)}…,` +
+          `现在是 ${actual.slice(0, 12)}… —— 引用它的证据都不作数了。`,
+      });
+    }
   }
 
   return findings;

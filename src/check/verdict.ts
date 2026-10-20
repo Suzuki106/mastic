@@ -10,8 +10,15 @@ export interface StatementVerdict {
   detail: string;
 }
 
+export interface ReproducibleVerdict {
+  passed: boolean;
+  detail: string;
+}
+
 export interface VerdictInput {
   commandOutcomes: CommandCheckOutcome[];
+  /** reproducible 级验收:把实验再做一遍的结果。 */
+  reproducibleOutcomes: ReproducibleVerdict[];
   replayOutcomes: ReplayOutcome[];
   /** 已经按致命规则集筛过的 lint 结论。 */
   fatalLint: LintFinding[];
@@ -54,6 +61,12 @@ export function decideStatus(input: VerdictInput): Verdict {
     if (!outcome.passed) {
       hard.push(`验收未通过 \`${outcome.check.run}\`:${outcome.detail}`);
     }
+  }
+
+  // 复现失败是硬伤:这套输入和代码再做一遍得不出同一个结果,
+  // 那这次实验的结论就没有可复现性可言
+  for (const outcome of input.reproducibleOutcomes) {
+    if (!outcome.passed) hard.push(`复现检查未通过:${outcome.detail}`);
   }
 
   for (const finding of input.fatalLint) {

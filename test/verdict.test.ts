@@ -7,6 +7,7 @@ import type { ReplayOutcome } from "../src/check/replay.ts";
 function base(overrides: Partial<VerdictInput> = {}): VerdictInput {
   return {
     commandOutcomes: [],
+    reproducibleOutcomes: [],
     replayOutcomes: [],
     fatalLint: [],
     statementVerdicts: [],
@@ -108,6 +109,33 @@ describe("定状态", () => {
       }),
     );
     assert.equal(verdict.status, "contradicted");
+  });
+
+  /**
+   * 复现失败是硬伤。注意这和"证据重放"不是一回事:重放证明记录忠实于当前世界,
+   * 复现证明这套输入和代码再做一遍还得得出同一个结果。
+   */
+  it("实验再做一遍结果不同 → contradicted", () => {
+    const verdict = decideStatus(
+      base({
+        commandOutcomes: [passingCommand],
+        replayOutcomes: [replayed],
+        reproducibleOutcomes: [{ passed: false, detail: "metrics.json:第 1 遍和第 2 遍 —— acc 0.93 vs 0.91" }],
+      }),
+    );
+    assert.equal(verdict.status, "contradicted");
+    assert.ok(verdict.reasons.some((r) => r.includes("复现")));
+  });
+
+  it("复现通过不影响已经通过的任务", () => {
+    const verdict = decideStatus(
+      base({
+        commandOutcomes: [passingCommand],
+        replayOutcomes: [replayed],
+        reproducibleOutcomes: [{ passed: true, detail: "跑了 2 遍,1 项结果一致" }],
+      }),
+    );
+    assert.equal(verdict.status, "verified");
   });
 
   it("worker 主动喊停 → blocked,即使别的都过了", () => {

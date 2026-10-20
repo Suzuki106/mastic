@@ -78,7 +78,7 @@ export interface FileChange {
  * 输出却不是逐字节可复现。它不改状态,只是让人看见。
  */
 export interface CheckReport {
-  kind: "command" | "evidence" | "statement" | "lint";
+  kind: "command" | "evidence" | "statement" | "lint" | "reproducible";
   label: string;
   passed: boolean;
   detail: string;
@@ -262,7 +262,13 @@ function parseVerdict(raw: unknown): VerdictReport | undefined {
     ? raw.checks.flatMap((item): CheckReport[] => {
         if (!isRecord(item)) return [];
         const kind = item.kind;
-        if (kind !== "command" && kind !== "evidence" && kind !== "statement" && kind !== "lint") {
+        if (
+          kind !== "command" &&
+          kind !== "evidence" &&
+          kind !== "statement" &&
+          kind !== "lint" &&
+          kind !== "reproducible"
+        ) {
           return [];
         }
         const check: CheckReport = {
