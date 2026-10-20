@@ -4,7 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, it } from "node:test";
 import { createLedger } from "../src/ledger.ts";
+import type { ContentPart } from "../src/llm.ts";
 import { findTool, workerTools, type ToolContext } from "../src/tools/index.ts";
+
+/** 工具返回可能是内容块,断言前拍平成文字。 */
+function textOf(output: string | ContentPart[]): string {
+  if (typeof output === "string") return output;
+  return output.map((p) => (p.type === "text" ? p.text : "[图]")).join(" ");
+}
 
 const root = await mkdtemp(join(tmpdir(), "mastic-tools-"));
 
@@ -37,7 +44,7 @@ async function failsWith(name: string, args: Record<string, unknown>, fragment: 
 describe("write_file", () => {
   it("普通代码文件照写", async () => {
     const out = await tool("write_file").run({ path: "src/a.py", content: "print(1)\n" }, ctx);
-    assert.ok(out.includes("已写入"));
+    assert.ok(textOf(out).includes("已写入"));
     assert.equal(await readFile(join(root, "src/a.py"), "utf8"), "print(1)\n");
   });
 
@@ -61,7 +68,7 @@ describe("write_file", () => {
 
   it("配置和笔记不受影响 —— .json 常常是配置,不拦", async () => {
     const out = await tool("write_file").run({ path: "spec/params.json", content: "{}\n" }, ctx);
-    assert.ok(out.includes("已写入"));
+    assert.ok(textOf(out).includes("已写入"));
   });
 });
 
@@ -76,5 +83,40 @@ describe("联网工具接了进来", () => {
   it("worker 拿得到搜索和抓取", () => {
     assert.ok(findTool(workerTools, "web_search"));
     assert.ok(findTool(workerTools, "fetch_url"));
+  });
+});
+
+describe("read_image", () => {
+  it("返回内容块:文字 + 真正的图片", async () => {
+    const { copyFile } = await import("node:fs/promises");
+    await copyFile("/home/vessel/mastic/assets/logo.png", join(root, "logo.png"));
+
+    const out = await tool("read_image").run({ path: "logo.png" }, ctx);
+    assert.ok(Array.isArray(out), "应当是内容块而不是纯文本");
+
+    const parts = out as ContentPart[];
+    assert.equal(parts.length, 2);
+    assert.equal(parts[0]?.type, "text");
+    assert.equal(parts[1]?.type, "image_url");
+    assert.ok((parts[1] as { image_url: { url: string } }).image_url.url.startsWith("data:image/png;base64,"));
+  });
+
+  it("看过的图会记进台账 —— 溯源检查靠它认出来", async () => {
+    const before = ctx.ledger.files.length;
+    await tool("read_image").run({ path: "logo.png" }, ctx);
+    assert.equal(ctx.ledger.files.length, before + 1);
+    assert.equal(ctx.ledger.files.at(-1)?.path, "logo.png");
+  });
+
+  it("不是图片的拒掉", async () => {
+    await failsWith("read_image", { path: "src/a.py" }, "不是支持的图片格式");
+  });
+
+  it("读不到的给清楚的错", async () => {
+    await failsWith("read_image", { path: "没有这张.png" }, "读不到");
+  });
+
+  it("越界路径挡得住", async () => {
+    await failsWith("read_image", { path: "../../etc/passwd.png" }, "工作目录外");
   });
 });

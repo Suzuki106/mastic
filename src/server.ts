@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { extname, join, normalize } from "node:path";
-import { MAX_IMAGES, parseDataUrl, type IncomingImage } from "./attachments.ts";
+import { MAX_IMAGES, MAX_TOTAL_IMAGE_BYTES, parseDataUrl, type IncomingImage } from "./attachments.ts";
 import { loadConfig, visionEnabled, type Config } from "./config.ts";
 import { parseDoc } from "./doc/frontmatter.ts";
 import { readEvents, type RunEvent } from "./events.ts";
@@ -110,6 +110,7 @@ function readImages(raw: unknown): { images: IncomingImage[] } | { error: string
   if (list.length > MAX_IMAGES) return { error: `最多带 ${MAX_IMAGES} 张图。` };
 
   const images: IncomingImage[] = [];
+  let totalBytes = 0;
   for (const [index, item] of list.entries()) {
     if (typeof item !== "object" || item === null) {
       return { error: `第 ${index + 1} 张图格式不对。` };
@@ -122,6 +123,11 @@ function readImages(raw: unknown): { images: IncomingImage[] } | { error: string
     if ("error" in parsed) {
       return { error: `第 ${index + 1} 张图:${parsed.error}` };
     }
+    totalBytes += parsed.bytes;
+    if (totalBytes > MAX_TOTAL_IMAGE_BYTES) {
+      return { error: `这些图加起来超过 ${MAX_TOTAL_IMAGE_BYTES / 1024 / 1024}MB 了,分批发吧。` };
+    }
+
     images.push({ dataUrl, ...(typeof name === "string" ? { name } : {}) });
   }
 

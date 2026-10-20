@@ -12,7 +12,14 @@ import { appendProvenance } from "./provenance.ts";
  * 当时那张图长什么样。
  */
 
-export const MAX_IMAGES = 4;
+export const MAX_IMAGES = 50;
+/**
+ * 一次上传的**总量**上限。
+ *
+ * 单张 4MB × 50 张是 200MB,而服务端是把整个请求体读进内存的 ——
+ * 不设总量的话,一次误操作就能把进程撑死。64MB 足够 50 张普通截图。
+ */
+export const MAX_TOTAL_IMAGE_BYTES = 64 * 1024 * 1024;
 export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
 
 /** 这几种是各家接口普遍认的。别的一律拒掉,免得发过去才报错。 */

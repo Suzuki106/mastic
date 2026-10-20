@@ -273,7 +273,11 @@ export async function signOutputs(
  * 只有这些进溯源判定 —— 源码、测试、配置不算实验数据,拉进来只会把链淹掉,
  * 而且会误伤(.json 当配置用时不该被要求证明来源)。
  */
-export const DATA_EXTENSIONS = [".csv", ".tsv", ".jsonl", ".parquet", ".xlsx", ".npz", ".npy", ".h5", ".arrow"];
+export const DATA_EXTENSIONS = [
+  ".csv", ".tsv", ".jsonl", ".parquet", ".xlsx", ".npz", ".npy", ".h5", ".arrow",
+  // 图片同样是"数据":AI 生成一张噪声图当输入,和编一份 CSV 是一回事
+  ".png", ".jpg", ".jpeg", ".webp", ".gif",
+];
 
 export function looksLikeDataFile(path: string): boolean {
   return DATA_EXTENSIONS.includes(extname(path).toLowerCase());

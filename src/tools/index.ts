@@ -2,9 +2,10 @@ import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { recordCommand, recordFile, type Ledger } from "../ledger.ts";
 import { runCommand, sha256Text } from "../exec.ts";
-import type { ToolSchema } from "../llm.ts";
+import type { ContentPart, ToolSchema } from "../llm.ts";
 import { displayPath, resolveInside } from "../paths.ts";
 import { DATA_DIR, isUnderDataDir, looksLikeDataFile } from "../provenance.ts";
+import { readImageTool } from "./image.ts";
 import { webTools } from "./web.ts";
 
 export interface ToolContext {
@@ -23,7 +24,8 @@ export interface Tool {
    * args 是模型给的,不可信 —— 实现里必须自己校验类型。
    * 抛出的错误会被上层转成一条 tool 消息回灌,不会冒泡出去。
    */
-  run(args: Record<string, unknown>, ctx: ToolContext): Promise<string>;
+  /** 通常返回文本;读图这类工具返回内容块(文字 + 图片)。 */
+  run(args: Record<string, unknown>, ctx: ToolContext): Promise<string | ContentPart[]>;
 }
 
 function requiredString(args: Record<string, unknown>, key: string): string {
@@ -224,7 +226,14 @@ const runBashTool: Tool = {
   },
 };
 
-export const workerTools: readonly Tool[] = [readFileTool, writeFileTool, listDirTool, runBashTool, ...webTools];
+export const workerTools: readonly Tool[] = [
+  readFileTool,
+  writeFileTool,
+  listDirTool,
+  runBashTool,
+  readImageTool,
+  ...webTools,
+];
 
 /** 只能看、不能改 —— planner 摸现场用。给它 bash 等于让它提前动手。 */
 // planner 也要联网 —— 它得先找得到真实数据源,才能写得出引用它的任务书

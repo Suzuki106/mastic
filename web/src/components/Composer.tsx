@@ -17,7 +17,7 @@ export interface ComposerProps {
 }
 
 /** 和后端保持一致,免得本地放行、发过去才被拒。 */
-const MAX_IMAGES = 4;
+const MAX_IMAGES = 50;
 const MAX_BYTES = 4 * 1024 * 1024;
 const ACCEPTED = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 
@@ -228,7 +228,7 @@ export function Composer({ onSubmit, busy, error, vision, mode, onMode, runId }:
 
       <p className="mt-1.5 text-[11px] text-faint">
         {vision
-          ? "可以带图:选择文件、拖进来、或直接粘贴截图,最多 4 张。"
+          ? "可以带图:选择文件、拖进来、或直接粘贴截图,最多 50 张。"
           : "当前模型不收图(MASTIC_VISION=0)。"}
       </p>
     </div>

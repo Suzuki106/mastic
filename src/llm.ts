@@ -27,7 +27,8 @@ export type Message =
   // user 可以是纯文本,也可以是若干内容块(带图时)
   | { role: "user"; content: string | ContentPart[] }
   | { role: "assistant"; content: string | null; tool_calls?: ToolCall[] }
-  | { role: "tool"; tool_call_id: string; content: string };
+  // tool 的返回通常是文本;读图的工具会返回内容块(文字 + 图片)
+  | { role: "tool"; tool_call_id: string; content: string | ContentPart[] };
 
 /** /chat/completions 的用量统计。各家 OpenAI 兼容实现的字段并不一致,
  *  所以除了三个基本项,其余一律按可选处理,缺了就按 0 记。 */

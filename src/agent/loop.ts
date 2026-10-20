@@ -81,6 +81,12 @@ function signatureOf(calls: { function: { name: string; arguments: string } }[])
   return calls.map((call) => `${call.function.name}(${call.function.arguments})`).join(" | ");
 }
 
+/** 工具返回可能是内容块(读图),事件里只放它的文字部分。 */
+function textOf(output: string | { type: string; text?: string }[]): string {
+  if (typeof output === "string") return output;
+  return output.map((part) => (part.type === "text" ? (part.text ?? "") : "[图]")).join(" ");
+}
+
 function preview(text: string, limit = 300): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > limit ? `${flat.slice(0, limit)}…` : flat;
@@ -235,7 +241,7 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
 
       try {
         const output = await tool.run(args, options.toolContext);
-        options.onEvent?.({ kind: "tool", detail: `${name} → ${preview(output, 160)}` });
+        options.onEvent?.({ kind: "tool", detail: `${name} → ${preview(textOf(output), 160)}` });
         messages.push({ role: "tool", tool_call_id: call.id, content: output });
       } catch (error) {
         // 工具失败远没有循环挂掉严重 —— 变成文本交回去让它自己想办法
