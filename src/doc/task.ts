@@ -112,6 +112,8 @@ export interface TaskDoc {
   deliverable: string;
   acceptance: AcceptanceCheck[];
   constraints: string[];
+  /** 这份任务书要挂的技能。worker 会拿到它们的手册全文。 */
+  skills: string[];
   /** 这份任务书里,哪些词不算违规(比如任务本身就是"写一个 mock server")。 */
   allow_terms: string[];
   body: string;
@@ -349,6 +351,7 @@ export function parseTaskDoc(raw: string): TaskParseResult {
     deliverable: deliverable ?? "",
     acceptance,
     constraints: readStringArray(data, "constraints", errors),
+    skills: readStringArray(data, "skills", errors),
     allow_terms: readStringArray(data, "allow_terms", errors),
     body: parsed.body,
   };
@@ -397,6 +400,7 @@ export function taskToData(task: TaskDoc): Record<string, unknown> {
   if (task.parent !== undefined) data.parent = task.parent;
   if (task.inputs.length > 0) data.inputs = task.inputs;
   if (task.constraints.length > 0) data.constraints = task.constraints;
+  if (task.skills.length > 0) data.skills = task.skills;
   if (task.allow_terms.length > 0) data.allow_terms = task.allow_terms;
 
   return data;

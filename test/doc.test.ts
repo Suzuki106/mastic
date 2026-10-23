@@ -29,6 +29,23 @@ describe("任务书解析", () => {
     assert.equal(task?.acceptance.length, 2);
   });
 
+  it("skills 字段能读能写", () => {
+    const raw = `---
+id: T-002
+title: 复现一张图
+goal: 照技能做
+deliverable: reports/T-002.md
+skills: [paper-repro, latex]
+acceptance:
+  - { kind: command, run: "true", expect: { exit_code: 0 } }
+---
+`;
+    const { task, errors } = parseTaskDoc(raw);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(task?.skills, ["paper-repro", "latex"]);
+    assert.ok(renderTaskDoc(task!).includes("paper-repro"));
+  });
+
   it("拒绝没有验收标准的任务", () => {
     const { task, errors } = parseTaskDoc(`---
 id: T-001

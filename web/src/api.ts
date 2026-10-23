@@ -19,7 +19,14 @@ export interface DocEntry<T> {
 export type Acceptance =
   | { kind: "command"; run: string; label?: string; expect?: Record<string, unknown> }
   | { kind: "structural"; require: string[] }
-  | { kind: "statement"; statement: string };
+  | { kind: "statement"; statement: string }
+  | {
+      kind: "reproducible";
+      run: string;
+      runs: number;
+      label?: string;
+      compare?: { path: string; mode: "exact" | "numeric"; tolerance?: number }[];
+    };
 
 export interface TaskInput {
   kind: "file" | "dir" | "url" | "image";
@@ -37,11 +44,13 @@ export interface TaskData {
   acceptance?: Acceptance[];
   constraints?: string[];
   inputs?: TaskInput[];
+  /** 这份任务挂了哪些技能。 */
+  skills?: string[];
   budget?: { max_steps?: number };
 }
 
 export interface CheckReport {
-  kind: "command" | "evidence" | "statement" | "lint";
+  kind: "command" | "evidence" | "statement" | "reproducible" | "lint";
   label: string;
   passed: boolean;
   /** 过了但有话要说 —— 典型是退出码对上了、输出不逐字节可复现。 */

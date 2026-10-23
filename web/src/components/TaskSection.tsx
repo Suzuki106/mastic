@@ -36,6 +36,11 @@ function AcceptanceList({ task }: { task: TaskData }) {
             <code className="font-mono text-[12.5px] break-all text-sky-700">{check.run}</code>
           ) : check.kind === "structural" ? (
             <span className="text-[12.5px] text-slate-600">{check.require.join(" · ")}</span>
+          ) : check.kind === "reproducible" ? (
+            <code className="font-mono text-[12.5px] break-all text-sky-700">
+              {check.run}
+              <span className="ml-2 text-faint">跑 {check.runs} 遍比对</span>
+            </code>
           ) : (
             <span className="text-[12.5px] text-slate-600">{check.statement}</span>
           )}
@@ -177,6 +182,21 @@ export function TaskSection({ taskId, task, report, view, runId }: TaskSectionPr
             <>
               {taskData.goal !== undefined && (
                 <p className="text-[13px] leading-relaxed text-muted">{taskData.goal}</p>
+              )}
+              {(taskData.skills ?? []).length > 0 && (
+                <>
+                  <SectionTitle>技能</SectionTitle>
+                  <ul className="flex flex-wrap gap-1.5">
+                    {(taskData.skills ?? []).map((skill) => (
+                      <li
+                        key={skill}
+                        className="rounded-full border border-line bg-slate-50 px-2 py-0.5 font-mono text-[11px] text-slate-600"
+                      >
+                        {skill}
+                      </li>
+                    ))}
+                  </ul>
+                </>
               )}
               {images.length > 0 && (
                 <>

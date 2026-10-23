@@ -314,6 +314,85 @@ inputs:
 | `MASTIC_COMMAND_TIMEOUT_MS` | `300000` | 验收命令超时 |
 | `MASTIC_REQUEST_IDLE_TIMEOUT_MS` | `240000` | 模型流空闲多久判断流(空闲超时,不是总时长) |
 | `MASTIC_VISION` | `1` | 模型收不收图。设 0 时界面不显示上传入口 |
+| `MASTIC_MCP` | `1` | 是否连 MCP 服务。设 0 时一个外部进程都不起 |
+| `MASTIC_SKILLS` | `1` | 是否加载技能。设 0 时任务书里的 `skills` 一律无效 |
+
+## 接入外部能力
+
+mastic 有两种外挂,**它们都不改变判定**。报告照样要过验收,证据照样要重放,
+状态照样由 verifier 定。外挂改变的只是 worker 手上有什么、脑子里装了什么。
+
+### MCP 服务
+
+配置文件是 Claude Desktop 那一套 `mcpServers` 格式,放在两个地方:
+
+```
+~/.config/mastic/mcp.json     用户级:这台机器上装了哪些服务
+<工作区>/.mastic/mcp.json      项目级:这个仓库要用哪些
+```
+
+同名时项目级覆盖用户级。只支持 **stdio** 传输 —— 远程 HTTP/SSE 的 MCP 服务
+目前连不上,这条是明确的边界,不是忘了写。
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"],
+      "env": { "SOME_TOKEN": "…" }
+    }
+  }
+}
+```
+
+运行开始时连一遍,`tools/list` 里的每个工具都会变成 `mcp__<服务名>__<工具名>`,
+worker 直接调。运行结束(含异常退出)会把服务进程连同它派生的子进程一起收掉。
+
+三条边界值得说清楚:
+
+- **只有 worker 拿得到 MCP 工具,planner 拿不到。** planner 只该读仓库和网页,
+  给它一个能写仓库的 MCP 服务,等于让它规划到一半就动手。
+- **MCP 的结果不进证据台账。** 外部服务的返回重放不了,拿它当证据等于绕过
+  整个验证链。worker 的提示词里会明说这一点。
+- **信任边界在配置里。** MCP 服务是普通子进程,`data/` 只读、`write_file` 禁写
+  数据文件这些约束管不到它。只接你信任的服务。
+
+一个服务连不上不会让整次运行失败 —— 它会变成事件流里的一条记录,其余的活照干。
+
+### 技能
+
+技能是一份写给 worker 看的工作手册:一段 Markdown,外加可选的附件。和 MCP 的
+区别是,MCP 给**能力**,技能给**做法**。
+
+```
+<工作区>/.mastic/skills/<名字>/SKILL.md
+~/.config/mastic/skills/<名字>/SKILL.md
+```
+
+同名时项目级赢。`SKILL.md` 的 frontmatter 只要两样,都可以省:
+
+```markdown
+---
+name: paper-repro
+description: 从论文里复现一张图的做法
+---
+
+先找到论文里的原始图和它的数据来源,再……
+```
+
+planner 只看到技能的名字和描述。任务正好对口时,它会在任务书里写:
+
+```yaml
+skills: [paper-repro]
+```
+
+worker 于是拿到那份手册的全文,以及技能目录下其他文件的清单 —— 清单里的文件
+用 `read_skill_file` 读,路径被锁在那个技能的目录里。没挂给这个任务的技能读不到,
+技能也不是读工作区的后门。
+
+写了个不存在的技能名会被 planner 退回;运行中途技能文件被删掉了,worker 会收到
+一条"技能缺失"的说明,由它判断这活还能不能干。
 
 ## 项目结构
 
@@ -342,6 +421,9 @@ src/
     lint.ts         禁词 / 证据 / 结构校验
     plan.ts         任务树校验与分层
   tools/            read_file / write_file / list_dir / run_bash
+  mcp/              外部工具:MCP stdio 客户端 + 配置加载 + 工具包装
+  skills.ts         技能发现、手册解析、附件读取
+  extensions.ts     一次运行带上的外挂(MCP 工具 + 技能索引)及其生命周期
   llm.ts            OpenAI 兼容流式客户端(带空闲超时)
   config.ts         环境变量
   ledger.ts         证据台账

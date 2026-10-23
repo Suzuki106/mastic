@@ -33,6 +33,15 @@ export interface Config {
   /** 当前模型收不收图片。关掉之后界面上不会出现上传入口。 */
   vision: boolean;
   /**
+   * 是否连 MCP 服务。
+   *
+   * 关掉之后一个外部进程都不会起 —— 在不受信的机器上跑、或者只是想省点启动时间时用。
+   * 配置本身还在,只是不生效。
+   */
+  mcp: boolean;
+  /** 是否加载 `.mastic/skills` 与用户级技能。关掉之后任务书里的 `skills` 字段一律无效。 */
+  skills: boolean;
+  /**
    * 模型流多久没有新内容就判连接死了(毫秒)。
    *
    * 是**空闲**超时不是总时长超时 —— 长回答本来就该慢慢吐,卡死的是那种
@@ -60,8 +69,12 @@ function optional(name: string): string | undefined {
  * `mastic ui` 去加载 key —— 光看界面本来是不需要 key 的。
  */
 export function visionEnabled(): boolean {
-  const raw = optional("MASTIC_VISION")?.toLowerCase();
-  if (raw === undefined) return true;
+  return flag("MASTIC_VISION", true);
+}
+
+function flag(name: string, fallback: boolean): boolean {
+  const raw = optional(name)?.toLowerCase();
+  if (raw === undefined) return fallback;
   return !["0", "false", "no", "off"].includes(raw);
 }
 
@@ -100,6 +113,8 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     commandTimeoutMs: positiveInt("MASTIC_COMMAND_TIMEOUT_MS", 300_000),
     requestIdleTimeoutMs: positiveInt("MASTIC_REQUEST_IDLE_TIMEOUT_MS", 240_000),
     vision: visionEnabled(),
+    mcp: flag("MASTIC_MCP", true),
+    skills: flag("MASTIC_SKILLS", true),
     ...overrides,
   };
 }

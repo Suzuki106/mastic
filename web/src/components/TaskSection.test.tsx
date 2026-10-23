@@ -64,6 +64,23 @@ describe("任务小节", () => {
     expect(html).toContain("evidence_for_every_claim");
   });
 
+  it("任务书里的技能和复现验收都显示出来", () => {
+    const html = render(
+      taskEntry({
+        skills: ["paper-repro"],
+        acceptance: [
+          { kind: "reproducible", run: "python train.py --out {out}", runs: 2, compare: [] },
+        ],
+      }),
+      undefined,
+      "task",
+    );
+    expect(html).toContain("paper-repro");
+    expect(html).toContain("python train.py --out {out}");
+    expect(html).toContain("跑 2 遍比对");
+    expect(html).toContain("reproducible");
+  });
+
   // 三态必须长得不一样 —— 把"过了但有话要说"画成叉,读的人会以为没验过
   it("裁定三态各有各的颜色", () => {
     const html = render(

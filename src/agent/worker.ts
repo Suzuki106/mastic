@@ -12,7 +12,8 @@ import {
 import { renderTaskDoc, type TaskDoc } from "../doc/task.ts";
 import { createLedger, deriveFilesChanged, findCommand, findFile, renderLedger, type Ledger } from "../ledger.ts";
 import type { Usage } from "../llm.ts";
-import { runToolLoop, type LoopEvent } from "./loop.ts";
+import { loadSkill, renderSkill, skillFileTool, type Skill, type SkillInfo } from "../skills.ts";
+import { runToolLoop, type ChatFn, type LoopEvent } from "./loop.ts";
 import { workerTools, type Tool, type ToolContext } from "../tools/index.ts";
 
 const REPORT_TOOL: Tool = {
@@ -131,7 +132,13 @@ export interface WorkOptions {
   maxSteps: number;
   /** 上一轮 verifier 的结论。重试时才有。 */
   findings?: string[];
+  /** MCP 服务提供的工具。它们的结果不进证据台账。 */
+  mcpTools?: readonly Tool[];
+  /** 技能索引。任务书里写了的名字会被解析成手册正文。 */
+  skills?: readonly SkillInfo[];
   onEvent?: (event: LoopEvent) => void;
+  /** 测试用:替换真实的模型调用,好在不烧 token 的前提下看清发了什么。 */
+  chat?: ChatFn;
 }
 
 export interface WorkResult {
@@ -239,22 +246,61 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
   );
   const images = imagePaths.length === 0 ? [] : await loadImages(options.runRoot, imagePaths);
 
+  // 任务书里点名的技能,在这里读成正文。找不到的不算致命 ——
+  // 技能是做法上的辅助,缺了手册活还是能干的(要不要停由 worker 自己判断)。
+  const assigned: Skill[] = [];
+  const missingSkills: string[] = [];
+  for (const name of options.task.skills) {
+    const info = (options.skills ?? []).find((skill) => skill.name === name);
+    const loaded = info === undefined ? null : await loadSkill(info);
+    if (loaded === null) missingSkills.push(name);
+    else assigned.push(loaded);
+  }
+
+  const skillBrief =
+    assigned.length === 0 ? "" : `\n\n## 技能\n\n${assigned.map(renderSkill).join("\n\n")}`;
+
+  const missingBrief =
+    missingSkills.length === 0
+      ? ""
+      : `\n\n## 技能缺失\n\n任务书要求了 ${missingSkills.join("、")},但没能加载。` +
+        `缺手册不影响你动手;如果缺了它这活根本没法做,写 blocked 说明。`;
+
+  // MCP 的结果没法重放,所以不能当证据 —— 这条边界要在它拿到工具的同时说清楚,
+  // 否则它会把一次外部查询当成"我验证过了"。
+  const mcpBrief =
+    (options.mcpTools?.length ?? 0) === 0
+      ? ""
+      : `\n\n## 外部工具\n\n` +
+        `\`mcp__*\` 是外部 MCP 服务提供的工具。它们能帮你查东西、做事,` +
+        `但它们的结果**不进证据台账**,不能当证据引用 —— 外部服务的返回重放不了。` +
+        `要拿它们的结果下结论,请留下一条可重跑的命令或一份可核对的文件作为证据。`;
+
   const brief =
-    `## 任务书\n\n${renderTaskDoc(options.task)}${retryNote}\n\n` +
+    `## 任务书\n\n${renderTaskDoc(options.task)}${retryNote}` +
+    skillBrief +
+    missingBrief +
+    mcpBrief +
     (images.length === 0
       ? ""
-      : `## 附图\n\n任务书里的 ${imagePaths.length} 张图已经附在这条消息上,直接看。\n\n`) +
-    `## 现在开始干活\n\n先读 acceptance 那条,再动手。`;
+      : `\n\n## 附图\n\n任务书里的 ${imagePaths.length} 张图已经附在这条消息上,直接看。`) +
+    `\n\n## 现在开始干活\n\n先读 acceptance 那条,再动手。`;
 
   const result = await runToolLoop({
     config: options.config,
     system: SYSTEM,
     user: images.length === 0 ? brief : [{ type: "text" as const, text: brief }, ...images],
-    tools: [...workerTools, REPORT_TOOL],
+    tools: [
+      ...workerTools,
+      ...(assigned.length === 0 ? [] : [skillFileTool(assigned)]),
+      ...(options.mcpTools ?? []),
+      REPORT_TOOL,
+    ],
     toolContext,
     terminalTool: "submit_report",
     maxSteps: options.maxSteps,
     onEvent: options.onEvent,
+    ...(options.chat === undefined ? {} : { chat: options.chat }),
 
     onTerminal: (args) => {
       const raw = args.report;

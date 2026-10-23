@@ -7,6 +7,7 @@ import { topoLayers } from "./doc/plan.ts";
 import type { ReportDoc, ReportStatus } from "./doc/report.ts";
 import type { TaskDoc } from "./doc/task.ts";
 import { createEventBus, runEventOf, type RunEvent } from "./events.ts";
+import { loadExtensions, type Extensions } from "./extensions.ts";
 import type { LoopEvent } from "./agent/loop.ts";
 import type { Usage } from "./llm.ts";
 import { discoveryTools } from "./tools/index.ts";
@@ -124,6 +125,7 @@ async function runTask(
   emit: (event: Omit<RunEvent, "seq" | "at" | "run">) => void,
   task: TaskDoc,
   maxSteps: number,
+  extensions: Extensions,
 ): Promise<TaskOutcome> {
   const maxAttempts = options.config.maxRetries + 1;
   let findings: string[] | undefined;
@@ -148,6 +150,8 @@ async function runTask(
       maxOutputChars: MAX_TOOL_OUTPUT,
       maxSteps,
       ...(findings === undefined ? {} : { findings }),
+      ...(extensions.mcpTools.length === 0 ? {} : { mcpTools: extensions.mcpTools }),
+      ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
       onEvent: (event) => emit(runEventOf(event.kind, task.id, event.detail)),
     });
 
@@ -229,8 +233,18 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
   const startedAt = new Date().toISOString();
   const empty: RunUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
+  let extensions: Extensions | undefined;
+
   try {
-    return await runOrchestration(options, paths, bus, startedAt);
+    // MCP 服务是外部进程 —— 起在运行开始时、关在 finally 里。
+    // 加载失败只记一条事件,不该让整次运行连试都不试。
+    extensions = await loadExtensions({
+      config: options.config,
+      workspace: options.workspace,
+      onEvent: (detail) => bus.emit({ kind: "task_step", task: "run", detail }),
+    });
+
+    return await runOrchestration(options, paths, bus, startedAt, extensions);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
 
@@ -246,6 +260,8 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
     });
 
     return { runId, paths, outcomes: [], usage: empty, failure: `运行中断:${reason}` };
+  } finally {
+    extensions?.close();
   }
 }
 
@@ -254,6 +270,7 @@ async function runOrchestration(
   paths: RunPaths,
   bus: ReturnType<typeof createEventBus>,
   createdAt: string,
+  extensions: Extensions,
 ): Promise<OrchestrateResult> {
   const runId = paths.root.split("/").pop() ?? "";
   const emptyUsage: RunUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
@@ -294,6 +311,7 @@ async function runOrchestration(
     workspace: options.workspace,
     runRoot: paths.root,
     ...(images.length === 0 ? {} : { images }),
+    ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
     timeoutMs: options.config.commandTimeoutMs,
     maxOutputChars: MAX_TOOL_OUTPUT,
     discoveryTools,
@@ -397,7 +415,7 @@ async function runOrchestration(
 
     let layerUsed = 0;
     await runPool(runnable, options.config.concurrency, async (task) => {
-      const outcome = await runTask(options, paths, (event) => bus.emit(event), task, layerLimit);
+      const outcome = await runTask(options, paths, (event) => bus.emit(event), task, layerLimit, extensions);
       layerUsed += outcome.steps;
       outcomes.set(task.id, outcome);
     });

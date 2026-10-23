@@ -73,8 +73,10 @@ describe("把实验再做一遍", () => {
    * "证据重放"只能证明记录忠实于当前世界;这里证明的是这套实验能不能重做。
    */
   it("带随机数的实验两遍不同 → 不通过", async () => {
+    // 两遍的 {out} 不同(repro-1 / repro-2),从目录名里取数就能稳定地造出
+    // "两次不一样"的结果 —— 用 `date +%N` 会偶发撞在同一个时间片里,让这条测试飘。
     const outcomes = await runReproducibleChecks(
-      task(`mkdir -p {out} && printf '{"acc":%s}\\n' "$(date +%N)" > {out}/m.json`),
+      task(`mkdir -p {out} && printf '{"acc":%s}\\n' "$(basename {out} | tr -dc 0-9)" > {out}/m.json`),
       { workspace, timeoutMs: 20_000 },
     );
     assert.equal(outcomes[0]?.passed, false);
@@ -89,7 +91,7 @@ describe("把实验再做一遍", () => {
 
   it("要求 exact 时,差一个字节就不行", async () => {
     const outcomes = await runReproducibleChecks(
-      task(`mkdir -p {out} && printf '{"acc":%s}\\n' "$(date +%N)" > {out}/m.json`, "exact"),
+      task(`mkdir -p {out} && printf '{"acc":%s}\\n' "$(basename {out} | tr -dc 0-9)" > {out}/m.json`, "exact"),
       { workspace, timeoutMs: 20_000 },
     );
     assert.equal(outcomes[0]?.passed, false);

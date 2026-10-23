@@ -3,7 +3,8 @@ import { validatePlan } from "../doc/plan.ts";
 import { parseTaskDoc, type TaskDoc } from "../doc/task.ts";
 import type { Usage } from "../llm.ts";
 import { createLedger } from "../ledger.ts";
-import { runToolLoop, type LoopEvent } from "./loop.ts";
+import type { SkillInfo } from "../skills.ts";
+import { runToolLoop, type ChatFn, type LoopEvent } from "./loop.ts";
 import type { Tool, ToolContext } from "../tools/index.ts";
 
 /** 终止工具只用来"接住"交卷动作 —— 循环会在派发前拦下它,run 永远不会被调到。 */
@@ -174,12 +175,16 @@ export interface PlanOptions {
   images?: PlanImage[];
   /** 现有任务树。给了就是**追加模式**:只输出新增任务。 */
   existing?: ExistingTask[];
+  /** 已安装的技能。planner 只看到索引,正文留给 worker 去读。 */
+  skills?: readonly SkillInfo[];
   timeoutMs: number;
   maxOutputChars: number;
   /** 只能看、不能改的工具 —— planner 摸现场用。 */
   discoveryTools: readonly Tool[];
   maxSteps: number;
   onEvent?: (event: LoopEvent) => void;
+  /** 测试用:替换真实的模型调用。 */
+  chat?: ChatFn;
 }
 
 export interface PlanResult {
@@ -206,6 +211,18 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
 
   const images = options.images ?? [];
   const existing = options.existing ?? [];
+  const skills = options.skills ?? [];
+
+  // 技能只在真有的时候才写进提示词 —— 没有技能时多说一句都是噪音
+  const skillSection =
+    skills.length === 0
+      ? ""
+      : `\n\n## 可用技能\n\n` +
+        `这个仓库安装了下面这些工作手册。某个任务正好对口时,在它的任务书 frontmatter 里加一行:\n\n` +
+        `\`skills: [名字]\`\n\n` +
+        `worker 会拿到那份手册的全文和目录下的附件。**只写下面真实存在的名字** —— ` +
+        `写错会被打回;拿不准就别写,技能不是必需品。\n\n` +
+        skills.map((skill) => `- \`${skill.name}\` —— ${skill.description}`).join("\n");
 
   const lines = [`目标:\n\n${options.goal}`];
 
@@ -240,13 +257,14 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
 
   const result = await runToolLoop({
     config: options.config,
-    system: existing.length > 0 ? SYSTEM + APPEND_RULES : SYSTEM,
+    system: (existing.length > 0 ? SYSTEM + APPEND_RULES : SYSTEM) + skillSection,
     user,
     tools: [...options.discoveryTools, PLAN_TOOL],
     toolContext,
     terminalTool: "submit_plan",
     maxSteps: options.maxSteps,
     onEvent: options.onEvent,
+    ...(options.chat === undefined ? {} : { chat: options.chat }),
 
     onTerminal: (args) => {
       const raw = args.tasks;
@@ -279,6 +297,21 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
       // 追加模式下「现状已经满足、不用加任务」是合法结论,不是空手而归。
       // 全新规划时交空数组才是失败 —— 那说明目标根本没被拆开。
       const nothingToDo = existing.length > 0 && tasks.length === 0;
+
+      // 技能名写错的话,worker 那边会找不到手册 —— 在这里就退回,别让它跑到一半才发现
+      if (skills.length > 0) {
+        const available = new Set(skills.map((skill) => skill.name));
+        for (const task of tasks) {
+          for (const name of task.skills) {
+            if (!available.has(name)) {
+              errors.push(
+                `任务 ${task.id} 的 \`skills\` 里写了不存在的技能 \`${name}\`。` +
+                  `可用的是:${skills.map((skill) => skill.name).join("、")}(不写也行)。`,
+              );
+            }
+          }
+        }
+      }
 
       if (errors.length === 0 && !nothingToDo) {
         // 追加模式下,新任务的 depends_on 允许指向已有任务

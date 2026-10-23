@@ -19,6 +19,8 @@ const config: Config = {
   commandTimeoutMs: 1000,
   requestIdleTimeoutMs: 1000,
   vision: true,
+  mcp: false,
+  skills: false,
 };
 
 const toolContext: ToolContext = {

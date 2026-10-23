@@ -17,10 +17,15 @@ export interface WorkspaceRegistry {
   switchTo(target: string): Promise<{ ok: true; path: string } | { ok: false; error: string }>;
 }
 
+/** mastic 的用户级配置目录(`~/.config/mastic`),和仓库无关。 */
+export function userConfigDir(): string {
+  const base = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
+  return join(base, "mastic");
+}
+
 /** 最近用过的记在用户配置目录里,和仓库无关。 */
 export function defaultStorePath(): string {
-  const base = process.env.XDG_CONFIG_HOME ?? join(homedir(), ".config");
-  return join(base, "mastic", "workspaces.json");
+  return join(userConfigDir(), "workspaces.json");
 }
 
 /** 只留最近这些个,免得这份文件无限长。 */

@@ -6,7 +6,8 @@ import { work } from "./agent/worker.ts";
 import { saveImage, type IncomingImage } from "./attachments.ts";
 import type { Config } from "./config.ts";
 import { parseTaskDoc, type TaskDoc } from "./doc/task.ts";
-import { createEventBus, runEventOf, type RunEvent } from "./events.ts";
+import { createEventBus, runEventOf, type EventBus, type RunEvent } from "./events.ts";
+import { loadExtensions, type Extensions } from "./extensions.ts";
 import { allocateSteps } from "./orchestrator.ts";
 import { discoveryTools } from "./tools/index.ts";
 import {
@@ -68,11 +69,37 @@ export async function resumeRun(
   runId: string,
   taskIds: string[] = [],
   onEvent?: (event: RunEvent) => void,
+  extensions?: Extensions,
 ): Promise<ResumeOutcome[]> {
   const paths = runPaths(workspace, runId);
   const bus = createEventBus(paths, runId);
   if (onEvent !== undefined) bus.subscribe(onEvent);
 
+  const owns = extensions === undefined;
+  const ext =
+    extensions ??
+    (await loadExtensions({
+      config,
+      workspace,
+      onEvent: (detail) => bus.emit({ kind: "task_step", task: "run", detail }),
+    }));
+
+  try {
+    return await resumeWith(config, workspace, runId, taskIds, paths, bus, ext);
+  } finally {
+    if (owns) ext.close();
+  }
+}
+
+async function resumeWith(
+  config: Config,
+  workspace: string,
+  runId: string,
+  taskIds: string[],
+  paths: RunPaths,
+  bus: EventBus,
+  extensions: Extensions,
+): Promise<ResumeOutcome[]> {
   const tasks = await loadTasks(paths);
   if (tasks.length === 0) throw new Error(`${runId} 里没有任务书,没法续跑。`);
 
@@ -135,6 +162,8 @@ export async function resumeRun(
       timeoutMs: config.commandTimeoutMs,
       maxOutputChars: MAX_TOOL_OUTPUT,
       maxSteps,
+      ...(extensions.mcpTools.length === 0 ? {} : { mcpTools: extensions.mcpTools }),
+      ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
       onEvent: (event) => bus.emit(runEventOf(event.kind, task.id, event.detail)),
     });
 
@@ -207,6 +236,31 @@ export async function continueRun(
   const bus = createEventBus(paths, runId);
   if (onEvent !== undefined) bus.subscribe(onEvent);
 
+  // 规划和执行共用同一批外挂 —— 否则会起两遍 MCP 进程,前一遍还没人关
+  const extensions = await loadExtensions({
+    config,
+    workspace,
+    onEvent: (detail) => bus.emit({ kind: "task_step", task: "run", detail }),
+  });
+
+  try {
+    return await continueWith(config, workspace, runId, goal, images, paths, bus, extensions, onEvent);
+  } finally {
+    extensions.close();
+  }
+}
+
+async function continueWith(
+  config: Config,
+  workspace: string,
+  runId: string,
+  goal: string,
+  images: IncomingImage[],
+  paths: RunPaths,
+  bus: EventBus,
+  extensions: Extensions,
+  onEvent?: (event: RunEvent) => void,
+): Promise<ContinueResult> {
   const tasks = await loadTasks(paths);
 
   // 现有任务 + 它们的裁定,原样交给 planner —— 它得知道自己站在什么上面
@@ -240,6 +294,7 @@ export async function continueRun(
     maxSteps: config.plannerSteps,
     existing,
     ...(planned.length === 0 ? {} : { images: planned }),
+    ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
     onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),
   });
 
@@ -252,7 +307,7 @@ export async function continueRun(
   for (const task of result.tasks) await writeTask(paths, task);
   bus.emit({ kind: "plan_done", detail: `追加 ${result.tasks.length} 个任务` });
 
-  const outcomes = await resumeRun(config, workspace, runId, result.tasks.map((task) => task.id), onEvent);
+  const outcomes = await resumeRun(config, workspace, runId, result.tasks.map((task) => task.id), onEvent, extensions);
 
   return { planned: result.tasks, nothingToDo: false, outcomes };
 }
