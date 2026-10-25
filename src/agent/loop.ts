@@ -9,6 +9,7 @@ import {
   type Usage,
 } from "../llm.ts";
 import { findTool, toolSchemas, type Tool, type ToolContext } from "../tools/index.ts";
+import { providerName, span } from "../telemetry.ts";
 
 /**
  * 发一次请求拿一次回复。
@@ -45,6 +46,8 @@ export interface ToolLoopOptions {
   onTerminal: (args: Record<string, unknown>) => string | undefined;
   maxSteps: number;
   onEvent?: (event: LoopEvent) => void;
+  /** 写进追踪 span 的 `gen_ai.agent.name`,让同一次 run 里三个角色分得开。 */
+  agentName?: string;
   /** 测试用。默认就是真的 streamChat。 */
   chat?: ChatFn;
 }
@@ -155,22 +158,48 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
     let lastPing = Date.now();
     options.onEvent?.({ kind: "thinking", detail: "" });
 
-    const { reply, toolCalls, usage: turnUsage } = await chat(options.config, messages, {
-      tools: schemas,
-      onReasoning: (text) => {
-        reasoning += text;
-
-        const now = Date.now();
-        if (now - lastPing < 8000) return;
-
-        const delta = reasoning.slice(reported);
-        if (delta.trim() === "") return;
-
-        lastPing = now;
-        reported = reasoning.length;
-        options.onEvent?.({ kind: "thinking", detail: delta });
+    const turn = await span(
+      `chat ${options.config.model}`,
+      {
+        "gen_ai.operation.name": "chat",
+        "gen_ai.provider.name": providerName(options.config.baseUrl),
+        "gen_ai.request.model": options.config.model,
+        ...(options.agentName === undefined ? {} : { "gen_ai.agent.name": options.agentName }),
+        "mastic.step": steps,
       },
-    });
+      async (handle) => {
+        const result = await chat(options.config, messages, {
+          tools: schemas,
+          onReasoning: (text) => {
+            reasoning += text;
+
+            const now = Date.now();
+            if (now - lastPing < 8000) return;
+
+            const delta = reasoning.slice(reported);
+            if (delta.trim() === "") return;
+
+            lastPing = now;
+            reported = reasoning.length;
+            options.onEvent?.({ kind: "thinking", detail: delta });
+          },
+        });
+
+        // 用量落在 span 上,而不是只写进 events.jsonl —— 标准管道要的是
+        // gen_ai.usage.*,那才是跨工具能聚合的字段。
+        handle.setAttribute("gen_ai.usage.input_tokens", result.usage?.prompt_tokens);
+        handle.setAttribute("gen_ai.usage.output_tokens", result.usage?.completion_tokens);
+        handle.setAttribute(
+          "gen_ai.response.finish_reasons",
+          result.finishReason === null ? undefined : result.finishReason,
+        );
+        handle.setAttribute("mastic.tool_calls", result.toolCalls.length);
+        return result;
+      },
+      3,
+    );
+
+    const { reply, toolCalls, usage: turnUsage } = turn;
 
     // 收尾:把最后不足 8 秒的那一段补上,否则结尾会缺一截
     const tail = reasoning.slice(reported);
@@ -240,7 +269,16 @@ export async function runToolLoop(options: ToolLoopOptions): Promise<ToolLoopRes
       }
 
       try {
-        const output = await tool.run(args, options.toolContext);
+        const output = await span(
+          `execute_tool ${name}`,
+          {
+            "gen_ai.operation.name": "execute_tool",
+            "gen_ai.tool.name": name,
+            "gen_ai.tool.call.id": call.id,
+            ...(options.agentName === undefined ? {} : { "gen_ai.agent.name": options.agentName }),
+          },
+          () => tool.run(args, options.toolContext),
+        );
         options.onEvent?.({ kind: "tool", detail: `${name} → ${preview(textOf(output), 160)}` });
         messages.push({ role: "tool", tool_call_id: call.id, content: output });
       } catch (error) {

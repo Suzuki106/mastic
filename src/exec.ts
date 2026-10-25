@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { span } from "./telemetry.ts";
 
 /** 回灌给人的输出上限。哈希不受这个影响,见下。 */
 const MAX_CAPTURE_BYTES = 256 * 1024;
@@ -45,6 +46,26 @@ export async function sha256File(path: string): Promise<string> {
  * 混在一起,分不清「超时」还是「被外部杀了」,而这两件事对验收的含义完全不同。
  */
 export async function runCommand(command: string, options: RunOptions): Promise<CommandResult> {
+  return await span(
+    "execute_tool bash",
+    {
+      "gen_ai.operation.name": "execute_tool",
+      "gen_ai.tool.name": "bash",
+      // 命令原文可能很长(或带密钥),只留够定位的一截
+      "mastic.command": command.length > 200 ? `${command.slice(0, 200)}…` : command,
+      "mastic.cwd": options.cwd,
+    },
+    async (handle) => {
+      const result = await runCommandRaw(command, options);
+      handle.setAttribute("mastic.exit_code", result.exitCode);
+      handle.setAttribute("mastic.timed_out", result.timedOut);
+      handle.setAttribute("mastic.duration_ms", result.durationMs);
+      return result;
+    },
+  );
+}
+
+async function runCommandRaw(command: string, options: RunOptions): Promise<CommandResult> {
   return await new Promise<CommandResult>((resolve, reject) => {
     const startedAt = Date.now();
     const hash = createHash("sha256");

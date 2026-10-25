@@ -180,6 +180,7 @@ function resolveDraft(draft: ReportDraft, ledger: Ledger): { report?: ReportDoc;
           exit_code: record.exitCode,
           stdout_sha256: record.stdoutSha256,
           stdout_bytes: record.stdoutBytes,
+          ...(record.inputs === undefined ? {} : { inputs: record.inputs }),
           ...(item.note === undefined ? {} : { note: item.note }),
         });
         continue;
@@ -299,6 +300,7 @@ export async function work(options: WorkOptions): Promise<WorkResult> {
     toolContext,
     terminalTool: "submit_report",
     maxSteps: options.maxSteps,
+    agentName: "worker",
     onEvent: options.onEvent,
     ...(options.chat === undefined ? {} : { chat: options.chat }),
 

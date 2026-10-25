@@ -10,6 +10,7 @@ import { createEventBus, runEventOf, type RunEvent } from "./events.ts";
 import { loadExtensions, type Extensions } from "./extensions.ts";
 import type { LoopEvent } from "./agent/loop.ts";
 import type { Usage } from "./llm.ts";
+import { agentSpan, tracerFromConfig, withTelemetry, workflowSpan } from "./telemetry.ts";
 import { discoveryTools } from "./tools/index.ts";
 import {
   createRun,
@@ -141,19 +142,28 @@ async function runTask(
       detail: attempt === 1 ? "开始" : `第 ${attempt} 次尝试`,
     });
 
-    const worked = await work({
-      config: options.config,
-      task,
-      workspace: options.workspace,
-      runRoot: paths.root,
-      timeoutMs: options.config.commandTimeoutMs,
-      maxOutputChars: MAX_TOOL_OUTPUT,
-      maxSteps,
-      ...(findings === undefined ? {} : { findings }),
-      ...(extensions.mcpTools.length === 0 ? {} : { mcpTools: extensions.mcpTools }),
-      ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
-      onEvent: (event) => emit(runEventOf(event.kind, task.id, event.detail)),
-    });
+    const worked = await agentSpan(
+      "worker",
+      {
+        "mastic.task.id": task.id,
+        "mastic.attempt": attempt,
+        "mastic.step_budget": maxSteps,
+      },
+      () =>
+        work({
+          config: options.config,
+          task,
+          workspace: options.workspace,
+          runRoot: paths.root,
+          timeoutMs: options.config.commandTimeoutMs,
+          maxOutputChars: MAX_TOOL_OUTPUT,
+          maxSteps,
+          ...(findings === undefined ? {} : { findings }),
+          ...(extensions.mcpTools.length === 0 ? {} : { mcpTools: extensions.mcpTools }),
+          ...(extensions.skills.length === 0 ? {} : { skills: extensions.skills }),
+          onEvent: (event) => emit(runEventOf(event.kind, task.id, event.detail)),
+        }),
+    );
 
     usage = addUsage(usage, worked.usage);
     usedSteps += worked.steps;
@@ -165,17 +175,24 @@ async function runTask(
       continue;
     }
 
-    const { verdict, report, usage: verifyUsage } = await verify({
-      config: options.config,
-      task,
-      report: worked.report,
-      workspace: options.workspace,
-      runRoot: paths.root,
-      ledger: worked.ledger,
-      preexistingData: worked.preexistingData,
-      timeoutMs: options.config.commandTimeoutMs,
-      onEvent: (detail) => emit({ kind: "task_step", task: task.id, detail }),
-    });
+    const workedReport = worked.report;
+
+    const { verdict, report, usage: verifyUsage } = await agentSpan(
+      "verifier",
+      { "mastic.task.id": task.id, "mastic.attempt": attempt },
+      () =>
+        verify({
+          config: options.config,
+          task,
+          report: workedReport,
+          workspace: options.workspace,
+          runRoot: paths.root,
+          ledger: worked.ledger,
+          preexistingData: worked.preexistingData,
+          timeoutMs: options.config.commandTimeoutMs,
+          onEvent: (detail) => emit({ kind: "task_step", task: task.id, detail }),
+        }),
+    );
 
     usage = addUsage(usage, verifyUsage);
     await writeReport(paths, report);
@@ -225,6 +242,19 @@ async function runTask(
  * "还在跑"的 run.md。
  */
 export async function orchestrate(options: OrchestrateOptions): Promise<OrchestrateResult> {
+  const tracer = tracerFromConfig(options.config);
+
+  return await withTelemetry(tracer, async () => {
+    try {
+      return await orchestrateInner(options);
+    } finally {
+      // 导出失败不影响运行结果 —— flush 自己吞异常
+      await tracer.flush();
+    }
+  });
+}
+
+async function orchestrateInner(options: OrchestrateOptions): Promise<OrchestrateResult> {
   const runId = options.runId ?? newRunId();
   const paths = await createRun(options.workspace, runId);
   const bus = createEventBus(paths, runId);
@@ -238,13 +268,16 @@ export async function orchestrate(options: OrchestrateOptions): Promise<Orchestr
   try {
     // MCP 服务是外部进程 —— 起在运行开始时、关在 finally 里。
     // 加载失败只记一条事件,不该让整次运行连试都不试。
-    extensions = await loadExtensions({
+    const loaded = await loadExtensions({
       config: options.config,
       workspace: options.workspace,
       onEvent: (detail) => bus.emit({ kind: "task_step", task: "run", detail }),
     });
+    extensions = loaded;
 
-    return await runOrchestration(options, paths, bus, startedAt, extensions);
+    return await workflowSpan(runId, options.goal, () =>
+      runOrchestration(options, paths, bus, startedAt, loaded),
+    );
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
 
@@ -305,8 +338,12 @@ async function runOrchestration(
     });
   }
 
-  const planned = await plan({
-    config: options.config,
+  const planned = await agentSpan(
+    "planner",
+    { "mastic.step_budget": options.planSteps ?? options.config.plannerSteps },
+    () =>
+      plan({
+        config: options.config,
     goal: options.goal,
     workspace: options.workspace,
     runRoot: paths.root,
@@ -318,8 +355,9 @@ async function runOrchestration(
     maxSteps: options.planSteps ?? options.config.plannerSteps,
     // kind 要原样带过去 —— 尤其 thinking:"还在请求模型"和"读完一个文件"
     // 在前端是两种东西,压成一种就画不出进行中的状态了
-    onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),
-  });
+        onEvent: (event) => bus.emit(runEventOf(event.kind, "planner", event.detail)),
+      }),
+  );
 
   const plannerUsage = addUsage(emptyUsage, planned.usage);
 

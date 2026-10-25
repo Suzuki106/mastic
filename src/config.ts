@@ -42,6 +42,14 @@ export interface Config {
   /** 是否加载 `.mastic/skills` 与用户级技能。关掉之后任务书里的 `skills` 字段一律无效。 */
   skills: boolean;
   /**
+   * OTLP/HTTP 接收端,例如 `http://localhost:4318`。
+   *
+   * 不填就完全关闭追踪 —— 不建 span、不缓冲、不发请求。事件流
+   * (`events.jsonl`)照旧,那是给人看的审计记录;这里是给 Jaeger / Tempo /
+   * Opik 那类标准管道看的。
+   */
+  otelEndpoint?: string;
+  /**
    * 模型流多久没有新内容就判连接死了(毫秒)。
    *
    * 是**空闲**超时不是总时长超时 —— 长回答本来就该慢慢吐,卡死的是那种
@@ -115,6 +123,9 @@ export function loadConfig(overrides: Partial<Config> = {}): Config {
     vision: visionEnabled(),
     mcp: flag("MASTIC_MCP", true),
     skills: flag("MASTIC_SKILLS", true),
+    ...(optional("MASTIC_OTEL_ENDPOINT") === undefined
+      ? {}
+      : { otelEndpoint: optional("MASTIC_OTEL_ENDPOINT") }),
     ...overrides,
   };
 }

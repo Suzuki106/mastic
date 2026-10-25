@@ -1,5 +1,6 @@
 import { loadConfig, type Config } from "./config.ts";
 import type { RunEvent } from "./events.ts";
+import { runEvidenceCommand } from "./evidence/cli.ts";
 import { checkWorkspace, reverify } from "./inspect.ts";
 import { orchestrate, type TaskOutcome } from "./orchestrator.ts";
 import { displayPath } from "./paths.ts";
@@ -7,7 +8,7 @@ import { resumeRun } from "./resume.ts";
 import { startServer } from "./server.ts";
 import { latestRunId } from "./workspace.ts";
 
-const HELP = `mastic —— 文档驱动的多 agent
+const HELP = `mastic —— 给 agent 产出做确定性判定
 
 用法:
   mastic run "<目标>"        把目标拆成任务树,并行跑,逐任务验收
@@ -16,6 +17,8 @@ const HELP = `mastic —— 文档驱动的多 agent
                              续跑没做完的任务(不重新规划,沿用现成任务书)
   mastic verify [run-id]     对已有运行重跑一遍验收(证据重放 + 验收命令)
   mastic check [run-id]      只校验文档合不合规,不跑命令、不碰模型(可进 CI)
+  mastic evidence <verify|chain|trace> …
+                             不跑 agent,只重放证据 / 验溯源链(可进 CI,无需 key)
   mastic help
 
 可选项:
@@ -25,6 +28,7 @@ const HELP = `mastic —— 文档驱动的多 agent
   --plan-steps <n>     planner 最多几步(默认 40)
   --port <n>           ui 的端口(默认 7777)
   --quiet              只在最后打印总结
+  --json               evidence 子命令输出机器可读结果
 `;
 
 /** 状态色。前端有前端的一套,这里只管终端。 */
@@ -53,11 +57,12 @@ interface Flags {
   planSteps?: number;
   port?: number;
   quiet: boolean;
+  json: boolean;
 }
 
 function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
   const positional: string[] = [];
-  const flags: Flags = { quiet: false };
+  const flags: Flags = { quiet: false, json: false };
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
@@ -65,6 +70,11 @@ function parseFlags(args: string[]): { positional: string[]; flags: Flags } {
 
     if (arg === "--quiet") {
       flags.quiet = true;
+      continue;
+    }
+
+    if (arg === "--json") {
+      flags.json = true;
       continue;
     }
 
@@ -185,7 +195,8 @@ async function main(): Promise<void> {
     command !== "ui" &&
     command !== "run" &&
     command !== "verify" &&
-    command !== "resume"
+    command !== "resume" &&
+    command !== "evidence"
   ) {
     console.log(`还不认识 \`${command}\`。\n`);
     console.log(HELP);
@@ -195,6 +206,16 @@ async function main(): Promise<void> {
   if (command === "run" && positional.join(" ").trim() === "") {
     console.error('要跑什么?比如:mastic run "把这个仓库加上 CI 配置"');
     process.exitCode = 1;
+    return;
+  }
+
+  // evidence 同样不碰模型、不需要 key —— 它是给"不跑 mastic agent"的
+  // 运行时留的接口:按格式写报告,拿这里判。
+  if (command === "evidence") {
+    process.exitCode = await runEvidenceCommand(positional, {
+      workspace: flags.workspace ?? process.cwd(),
+      json: flags.json,
+    });
     return;
   }
 

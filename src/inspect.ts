@@ -5,6 +5,7 @@ import type { Config } from "./config.ts";
 import { fatalFindings, lintReport } from "./doc/lint.ts";
 import { parseReportDoc, type ReportDoc } from "./doc/report.ts";
 import { parseTaskDoc, type TaskDoc } from "./doc/task.ts";
+import { agentSpan, withRunTelemetry } from "./telemetry.ts";
 import { writeReport, listRunIds, readRunDoc, runPaths, type RunPaths } from "./workspace.ts";
 
 export interface CheckResult {
@@ -127,6 +128,17 @@ export async function reverify(
   runId: string,
   onEvent?: (detail: string) => void,
 ): Promise<ReverifyOutcome[]> {
+  return await withRunTelemetry(config, runId, `重验 ${runId}`, () =>
+    reverifyInner(config, workspace, runId, onEvent),
+  );
+}
+
+async function reverifyInner(
+  config: Config,
+  workspace: string,
+  runId: string,
+  onEvent?: (detail: string) => void,
+): Promise<ReverifyOutcome[]> {
   const paths = runPaths(workspace, runId);
   const { tasks } = await loadTasks(paths);
   const { reports } = await loadReports(paths);
@@ -142,19 +154,21 @@ export async function reverify(
     }
 
     onEvent?.(`重验 ${report.task}`);
-    const { verdict, report: updated } = await verify({
-      config,
-      task,
-      report,
-      workspace,
-      runRoot: paths.root,
-      // 重判旧报告时没有当时的台账,数据溯源这一项跳过 ——
-      // 它需要知道那一轮读过什么,而那个信息只活在 worker 的内存里
-      ledger: { commands: [], files: [] },
-      preexistingData: [],
-      timeoutMs: config.commandTimeoutMs,
-      onEvent: (detail) => onEvent?.(`  ${detail}`),
-    });
+    const { verdict, report: updated } = await agentSpan("verifier", { "mastic.task.id": task.id }, () =>
+      verify({
+        config,
+        task,
+        report,
+        workspace,
+        runRoot: paths.root,
+        // 重判旧报告时没有当时的台账,数据溯源这一项跳过 ——
+        // 它需要知道那一轮读过什么,而那个信息只活在 worker 的内存里
+        ledger: { commands: [], files: [] },
+        preexistingData: [],
+        timeoutMs: config.commandTimeoutMs,
+        onEvent: (detail) => onEvent?.(`  ${detail}`),
+      }),
+    );
 
     await writeReport(paths, updated);
     outcomes.push({ task: report.task, status: verdict.status, reasons: verdict.reasons });

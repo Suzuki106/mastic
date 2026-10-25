@@ -263,6 +263,7 @@ export async function plan(options: PlanOptions): Promise<PlanResult> {
     toolContext,
     terminalTool: "submit_plan",
     maxSteps: options.maxSteps,
+    agentName: "planner",
     onEvent: options.onEvent,
     ...(options.chat === undefined ? {} : { chat: options.chat }),
 

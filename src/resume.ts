@@ -9,6 +9,7 @@ import { parseTaskDoc, type TaskDoc } from "./doc/task.ts";
 import { createEventBus, runEventOf, type EventBus, type RunEvent } from "./events.ts";
 import { loadExtensions, type Extensions } from "./extensions.ts";
 import { allocateSteps } from "./orchestrator.ts";
+import { withRunTelemetry } from "./telemetry.ts";
 import { discoveryTools } from "./tools/index.ts";
 import {
   readReport,
@@ -85,7 +86,9 @@ export async function resumeRun(
     }));
 
   try {
-    return await resumeWith(config, workspace, runId, taskIds, paths, bus, ext);
+    return await withRunTelemetry(config, runId, `续跑 ${runId}`, () =>
+      resumeWith(config, workspace, runId, taskIds, paths, bus, ext),
+    );
   } finally {
     if (owns) ext.close();
   }
@@ -244,7 +247,9 @@ export async function continueRun(
   });
 
   try {
-    return await continueWith(config, workspace, runId, goal, images, paths, bus, extensions, onEvent);
+    return await withRunTelemetry(config, runId, goal, () =>
+      continueWith(config, workspace, runId, goal, images, paths, bus, extensions, onEvent),
+    );
   } finally {
     extensions.close();
   }

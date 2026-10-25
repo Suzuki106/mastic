@@ -12,6 +12,7 @@ import type { Ledger } from "../ledger.ts";
 import { streamChat, type Usage } from "../llm.ts";
 import { resolveInside } from "../paths.ts";
 import { sha256File } from "../exec.ts";
+import { providerName, span } from "../telemetry.ts";
 import { DATA_DIR, listFiles, looksLikeDataFile, readProvenance, traceInput } from "../provenance.ts";
 
 export interface VerifyOptions {
@@ -97,16 +98,33 @@ async function judgeStatements(
       ? "(无)"
       : options.report.unresolved.map((item) => `- ${item}`).join("\n");
 
-  const { reply, usage } = await streamChat(options.config, [
-    { role: "system", content: JUDGE_SYSTEM },
+  const judged = await span(
+    `chat ${options.config.model}`,
     {
-      role: "user",
-      content:
-        `待判定的陈述:\n${checks.map((check, index) => `${index + 1}. ${check.statement}`).join("\n")}\n\n` +
-        `报告的主张:\n${claims}\n\n报告的未解决项:\n${unresolved}\n\n` +
-        `报告正文:\n${options.report.body}`,
+      "gen_ai.operation.name": "chat",
+      "gen_ai.provider.name": providerName(options.config.baseUrl),
+      "gen_ai.request.model": options.config.model,
+      "gen_ai.agent.name": "verifier",
     },
-  ]);
+    async (handle) => {
+      const result = await streamChat(options.config, [
+        { role: "system", content: JUDGE_SYSTEM },
+        {
+          role: "user",
+          content:
+            `待判定的陈述:\n${checks.map((check, index) => `${index + 1}. ${check.statement}`).join("\n")}\n\n` +
+            `报告的主张:\n${claims}\n\n报告的未解决项:\n${unresolved}\n\n` +
+            `报告正文:\n${options.report.body}`,
+        },
+      ]);
+      handle.setAttribute("gen_ai.usage.input_tokens", result.usage?.prompt_tokens);
+      handle.setAttribute("gen_ai.usage.output_tokens", result.usage?.completion_tokens);
+      return result;
+    },
+    3,
+  );
+
+  const { reply, usage } = judged;
 
   const parsed = extractJsonArray(reply);
 
@@ -307,15 +325,23 @@ async function checkDataInputs(options: VerifyOptions): Promise<LintFinding[]> {
 async function checkDataDir(options: VerifyOptions): Promise<LintFinding[]> {
   const dataDir = join(options.workspace, DATA_DIR);
   const provenancePath = join(options.runRoot, "provenance.jsonl");
+  const preexisting = new Set(options.preexistingData);
   const findings: LintFinding[] = [];
 
   for (const relative of await listFiles(dataDir)) {
+    const workspaceRelative = `${DATA_DIR}/${relative}`;
+
+    // 动手前就在那儿的数据是用户放的 —— 来源是用户,不需要链上再记一笔。
+    // 只有这一轮运行期间**新出现**的,才必须能走回外部地址或用户上传。
+    // 没有这一条,用户只要把 csv 放进 data/,每次运行都会被误判成伪造观测。
+    if (preexisting.has(workspaceRelative)) continue;
+
     const verdict = await traceInput(provenancePath, join(dataDir, relative));
     if (verdict.traceable) continue;
 
     findings.push({
       rule: "data_dir_untouched",
-      where: `${DATA_DIR}/${relative}`,
+      where: workspaceRelative,
       detail: `原始数据区里出现了没有来源的文件。${verdict.detail}`,
     });
   }

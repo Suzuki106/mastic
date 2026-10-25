@@ -29,6 +29,66 @@ export interface ReplayOptions {
   timeoutMs: number;
 }
 
+/**
+ * 差异归因:记录之后,这条命令读过的输入到底变没变?
+ *
+ * 重放只能说出"对不上",说不出为什么。原先的措辞承认"分不清是工作区变了
+ * 还是数字编的" —— 现在至少能把这句模糊的话缩到可判定的范围:
+ *
+ * - 输入变过 → 工作区变化足以解释差异,证据过期了(仍然不能作数,但不定性为说谎);
+ * - 输入没变 → 工作区解释不了,记录本身站不住的可能性更大。
+ *
+ * 边界照旧:**这不是完整依赖集**。命令可能读了 worker 从没 `read_file` 过的
+ * 文件,那种情况只能诚实地说"没记录到输入,无法归因"。
+ */
+async function attribute(
+  evidence: Extract<Evidence, { kind: "command" }>,
+  workspace: string,
+): Promise<string> {
+  const inputs = evidence.inputs ?? [];
+  if (inputs.length === 0) {
+    return "归因:这条证据没带输入快照(命令可能通过子进程读文件),无法归因。";
+  }
+
+  const changed: string[] = [];
+  let checked = 0;
+
+  for (const input of inputs) {
+    let path: string;
+    try {
+      path = resolveInside(workspace, input.path);
+    } catch {
+      changed.push(`${input.path}(路径越界)`);
+      continue;
+    }
+
+    let actual: string;
+    try {
+      actual = await sha256File(path);
+    } catch {
+      changed.push(`${input.path}(已不存在)`);
+      continue;
+    }
+
+    checked += 1;
+    if (actual !== input.sha256) {
+      changed.push(`${input.path}(${input.sha256.slice(0, 8)}… → ${actual.slice(0, 8)}…)`);
+    }
+  }
+
+  if (changed.length > 0) {
+    return (
+      `归因:记录之后这些输入变过 —— ${changed.join("、")}。` +
+      `工作区变化足以解释这次对不上,这份证据已经过期;重跑一遍再引用。`
+    );
+  }
+
+  return (
+    `归因:记录之后它读过的 ${checked} 个输入都没变 —— ` +
+    `工作区变化解释不了这次对不上,更像是记录本身不实。`
+  );
+}
+
 async function replayOne(
   evidence: Evidence,
   options: ReplayOptions,
@@ -101,12 +161,13 @@ async function replayOne(
   // 也可能是记录之后工作区变了(比如那条命令 `ls -R src`,而 worker 随后
   // 就在 src 下建了新文件)。**分不清是哪种** —— 所以措辞只说事实,
   // 不指控说谎。但这条证据确实已经不能作数,该重做。
+  const attribution = await attribute(evidence, options.workspace);
+
   return {
     verdict: "contradicted",
     detail:
       `\`${evidence.run}\` 连着重跑两次输出完全一致(它现在是稳定的),` +
-      `但和报告里记的对不上。要么记录之后工作区变了(这条命令依赖了可变状态),` +
-      `要么记录里那个数是编的 —— 分不清是哪种,但这条证据已经不能作数`,
+      `但和报告里记的对不上。\n${attribution}`,
   };
 }
 

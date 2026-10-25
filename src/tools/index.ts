@@ -1,6 +1,6 @@
 import { mkdir, readFile, readdir, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { recordCommand, recordFile, type Ledger } from "../ledger.ts";
+import { readInputs, recordCommand, recordFile, type Ledger } from "../ledger.ts";
 import { runCommand, sha256Text } from "../exec.ts";
 import type { ContentPart, ToolSchema } from "../llm.ts";
 import { displayPath, resolveInside } from "../paths.ts";
@@ -206,6 +206,7 @@ const runBashTool: Tool = {
     const cwd = resolveInside(ctx.workspace, rawCwd ?? ".");
     const result = await runCommand(command, { cwd, timeoutMs: ctx.timeoutMs });
 
+    const inputs = readInputs(ctx.ledger);
     const entry = recordCommand(ctx.ledger, {
       run: command,
       cwd: displayPath(ctx.workspace, cwd),
@@ -214,6 +215,7 @@ const runBashTool: Tool = {
       stdoutBytes: result.stdoutBytes,
       durationMs: result.durationMs,
       timedOut: result.timedOut,
+      ...(inputs.length === 0 ? {} : { inputs }),
     });
 
     const parts = [`${entry.id} | 退出码 ${result.exitCode} | ${result.durationMs}ms`];

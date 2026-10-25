@@ -25,6 +25,12 @@ export type ReportStatus = (typeof REPORT_STATUSES)[number];
 export const EVIDENCE_KINDS = ["command", "file", "url"] as const;
 export type EvidenceKind = (typeof EVIDENCE_KINDS)[number];
 
+/** 记录这条命令时,worker 已经读过的文件及其当时的哈希 —— 归因重放靠它。 */
+export interface EvidenceInput {
+  path: string;
+  sha256: string;
+}
+
 /** 跑一条命令留下的痕迹。verifier 会照着这里重跑一遍比对。 */
 export interface CommandEvidence {
   kind: "command";
@@ -33,6 +39,13 @@ export interface CommandEvidence {
   exit_code: number;
   stdout_sha256: string;
   stdout_bytes?: number;
+  /**
+   * 执行这条命令前的已读文件快照。
+   *
+   * 它不是完整依赖集,只是 mastic 确实看见过的那部分输入。重放对不上时,
+   * 用它区分「记录之后输入变了」和「输入没变,记录本身不实」。
+   */
+  inputs?: EvidenceInput[];
   note?: string;
 }
 
@@ -140,6 +153,16 @@ function parseEvidence(raw: unknown[], errors: Problems, where: string): Evidenc
       };
       const bytes = readInt(item, "stdout_bytes", errors, -1);
       if (bytes >= 0) evidence.stdout_bytes = bytes;
+
+      // 归因输入是 mastic 自己写的,读不回来也不能让整份报告打不开
+      if (Array.isArray(item.inputs)) {
+        const inputs = item.inputs.flatMap((entry): EvidenceInput[] => {
+          if (!isRecord(entry)) return [];
+          if (typeof entry.path !== "string" || typeof entry.sha256 !== "string") return [];
+          return [{ path: entry.path, sha256: entry.sha256 }];
+        });
+        if (inputs.length > 0) evidence.inputs = inputs.slice(0, 20);
+      }
       if (note !== undefined) evidence.note = note;
       return [evidence];
     }

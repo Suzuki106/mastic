@@ -5,8 +5,13 @@
 <h1 align="center">mastic</h1>
 
 <p align="center">
-文档驱动的多 agent —— 让 agent 的产出变成<strong>可验收、可追溯、可反驳</strong>的文档。
+agent 产出的<strong>确定性验证层</strong> —— 让「完成」变成可重放的机械事实,
+而不是一句自报。
 </p>
+
+它不是一个更好的多 agent 编排器。编排只是它跑起来的方式;它真正做的事是:
+**每条结论必须携带可重放的证据,编造的证据在结构上写不出来,裁定由确定性规则
+而不是模型自评落地。**
 
 ## 它解决什么
 
@@ -87,6 +92,34 @@ blocked       走不下去(缺输入 / 需要人拍板)
 
 **失败是合法终态。** 一个不许说"我不知道"的系统,必然学会说"我做完了"。
 
+## 和这些工作在回答同一个问题
+
+mastic 不是某篇论文的实现;它是在 **Chain-of-Evidence** 那条线上做的一个工程化身,
+面向代码任务而不是论文生产。
+
+- **[ScientistOne: Towards Human-Level Autonomous Research via Chain-of-Evidence](https://arxiv.org/abs/2605.26340)**
+  把「每条 claim 必须沿记录下来的证据链追溯到 grounding source」当作研究制品可信性
+  的第一性定义,并按 citation / numerical / methodological / conclusion 四类 claim
+  规定证据链形状。mastic 的对应物是 `claims[].evidence[]`、台账引用、重放判定。
+  差别在于:它验论文,这里验代码任务;它的部分完整性检查靠 LLM,这里尽量压成
+  确定性规则。
+- **[Audit-Trail Fabrication in Tool-Using LLM Agents](https://doi.org/10.5281/zenodo.18463378)**
+  记录了另一种更危险的失败:agent 不只编事实,还会编**程序性证据** —— 伪造执行日志、
+  时间戳、文件路径。它给出的方向是「把程序性主张绑定到签过字的执行记录」。
+  mastic 的台账 + 哈希链就是这个方向的朴素实现:worker 只写 `ref: C3`,
+  哈希由 mastic 在执行那一刻记下;改掉溯源链中间一条,后面每条摘要都会对不上。
+- **[When Agentic Executions Fail: Detecting and Localizing Runtime Faults from Telemetry](https://arxiv.org/abs/2608.14680)**
+  用可控故障注入评估 agent 可观测性,主张失败要从执行轨迹定位,而不是只看最终答案。
+  mastic 的 `benchmarks/faults/` 借了它的方法:每个用例故意犯一种错,走真实的
+  lint / 重放 / 裁定链路,并同时报告「没有验证层时会怎样」。
+- **OpenTelemetry GenAI 语义约定**是 2026 年 tracing 的 vendor-neutral 契约。
+  mastic 保留 `events.jsonl` 作为面向人的审计流,同时把
+  `invoke_workflow` / `invoke_agent` / `chat` / `execute_tool` 发成 OTLP span,
+  让 Jaeger、Tempo、Opik 这类管道直接消费。
+
+这些联系不改变一句边界:**mastic 是确定性护栏,不是概率性评估。**
+它不判断结论好不好、有没有新意,只判断这条结论有没有被它声称的证据支撑。
+
 ## 快速开始
 
 需要 Node ≥ 23.6。后端直接跑 `.ts`(Node 原生擦除类型,不经编译);
@@ -160,9 +193,12 @@ mastic run "<目标>"        # 拆任务树 → 并行执行 → 逐任务验收
 mastic ui [run-id]         # Web 界面:任务树 / 文档 / 实时事件流
 mastic verify [run-id]     # 对已有运行重跑验收(证据重放 + 验收命令)
 mastic check [run-id]      # 只校验文档,不跑命令、不碰模型(可进 CI)
+mastic evidence verify <report.md>              # 重放一份报告,不需要 agent / key
+mastic evidence chain <provenance.jsonl>        # 校验溯源链
+mastic evidence trace <provenance.jsonl> <file> # 查一个数据文件的来源
 ```
 
-常用选项:`--workspace <路径>` `--concurrency <n>` `--retries <n>` `--port <n>` `--quiet`
+常用选项:`--workspace <路径>` `--concurrency <n>` `--retries <n>` `--port <n>` `--quiet` `--json`
 
 `check` 不加载 API key,所以它能直接进 CI —— 拿它守住"文档别退化成散文"。
 
@@ -316,6 +352,7 @@ inputs:
 | `MASTIC_VISION` | `1` | 模型收不收图。设 0 时界面不显示上传入口 |
 | `MASTIC_MCP` | `1` | 是否连 MCP 服务。设 0 时一个外部进程都不起 |
 | `MASTIC_SKILLS` | `1` | 是否加载技能。设 0 时任务书里的 `skills` 一律无效 |
+| `MASTIC_OTEL_ENDPOINT` | 不填 | OTLP/HTTP 接收端(如 `http://localhost:4318`)。不填就完全关闭追踪 |
 
 ## 接入外部能力
 
@@ -394,6 +431,88 @@ worker 于是拿到那份手册的全文,以及技能目录下其他文件的清
 写了个不存在的技能名会被 planner 退回;运行中途技能文件被删掉了,worker 会收到
 一条"技能缺失"的说明,由它判断这活还能不能干。
 
+### 标准追踪(OpenTelemetry)
+
+```bash
+MASTIC_OTEL_ENDPOINT=http://localhost:4318 mastic run "…"
+```
+
+不填就完全关闭:不建 span、不缓冲、不发请求。填了之后,一次运行长这样:
+
+```
+invoke_workflow mastic                gen_ai.operation.name=invoke_workflow
+├─ invoke_agent planner               gen_ai.agent.name=planner
+│  ├─ chat deepseek-chat              gen_ai.usage.input_tokens / output_tokens
+│  └─ execute_tool list_dir
+├─ invoke_agent worker                gen_ai.agent.name=worker
+│  ├─ chat deepseek-chat
+│  ├─ execute_tool read_file
+│  └─ execute_tool bash               mastic.exit_code / duration_ms
+└─ invoke_agent verifier
+   └─ execute_tool bash               (验收命令重跑)
+```
+
+用的是 OTLP/HTTP 的 JSON 编码,**没有加 `@opentelemetry/*` 依赖** —— 需要的
+只是把结构化 span POST 到 `/v1/traces`,而协议本身是标准。三条纪律:
+
+- 没配 endpoint 时 `span()` 是空操作,不产生任何开销意义上的对象;
+- 导出失败只记在最后一个错误里,不让整次运行失败;
+- `events.jsonl` 不动。那是面向人的审计流,OTel 是给机器管道的,两者回答的问题不同。
+
+## 给不跑 mastic 的运行时
+
+证据层不绑定 agent 循环。任何运行时(另一个框架、一个 Python 脚本、CI 的一步)
+只要**按报告格式写文件**,就能被判定:
+
+```bash
+bash examples/evidence-only/run.sh /tmp/demo "echo hello"
+mastic evidence verify /tmp/demo/.mastic/evidence-example/report.md --workspace /tmp/demo
+```
+
+那个脚本自己跑命令、自己算哈希、自己写报告 —— mastic 全程没有参与执行。
+把报告里的 `stdout_sha256` 改成任意 64 个字符再验一次,裁定会变成 `contradicted`。
+
+同样可以从代码里用:
+
+```ts
+import { replayEvidence, verifyChain, traceInput } from "mastic/evidence";
+```
+
+这一层只做机械判定:**不规划、不调模型、不需要 API key**。
+statement 级验收需要模型判断,不属于这个入口 —— 那本质上是"概率性意见",
+不是"确定性证据"。
+
+## 故障注入
+
+```bash
+npm run test:faults            # 人看的矩阵
+npm run test:faults -- --json  # 机器读的结果
+```
+
+每个用例是一段可复现的对抗脚本,走**真实的** parse / lint / replay / verdict 链路。
+矩阵同时报告「没有验证层时会怎样」:
+
+```
+用例                                无验证层    mastic          结果
+诚实命令证据(对照组)                接受        verified        ✓
+编造退出码(声称 0,实际 1)           接受        contradicted    ✓
+编造 stdout 哈希(命令稳定)          接受        contradicted    ✓
+编造文件哈希                        接受        contradicted    ✓
+审计轨迹伪造(声称 fetch,实为模型写入)接受        contradicted    ✓
+诚实抓取的数据当实验输入            接受        verified        ✓
+用户本来就放在工作区的数据          接受        verified        ✓
+往原始数据区塞没有来源的文件        接受        contradicted    ✓
+只有 URL 证据(内容随时间变)         接受        unverified      ✓
+诚实但输出漂移(带时间戳)            接受        verified        ✓
+依赖环的任务树                      接受        plan-rejected   ✓
+步数用尽后强制交卷                  未完成      contradicted    ✓
+
+拦截率(对抗用例):7/7   误杀率(老实证据):0/4
+```
+
+数字只对**这套用例**成立,不要外推。它的价值在于可复现:全部离线,零 API key,
+每次跑结论一致。想加一类错,写一个 case 就行 —— 前提是它真的能失败。
+
 ## 项目结构
 
 依赖方向是设计的一部分 —— 越靠下的层越纯,底下三层完全不碰模型:
@@ -411,8 +530,11 @@ src/
     verifier.ts     报告 → 裁定(机械判定优先,模型只判陈述级)
   check/            纯函数,零模型调用
     run.ts          三级验收执行器
-    replay.ts       证据重放(含"再跑一次"判别实验)
+    replay.ts       证据重放(含"再跑一次"判别实验 + 差异归因)
     verdict.ts      定状态
+  evidence/         框架无关的证据层
+    index.ts        台账 / 重放 / 溯源 / 裁定的稳定出口(包导出 `mastic/evidence`)
+    cli.ts          `mastic evidence verify|chain|trace`
   doc/              纯数据,零 IO
     frontmatter.ts  YAML frontmatter 读写
     validate.ts     手写字段校验(错误消息会回灌给模型,所以不用 zod)
@@ -425,6 +547,7 @@ src/
   skills.ts         技能发现、手册解析、附件读取
   extensions.ts     一次运行带上的外挂(MCP 工具 + 技能索引)及其生命周期
   llm.ts            OpenAI 兼容流式客户端(带空闲超时)
+  telemetry.ts      OTel GenAI spans(零依赖 OTLP/HTTP JSON 导出)
   config.ts         环境变量
   ledger.ts         证据台账
   exec.ts           命令执行(自己计时杀进程)
@@ -449,6 +572,9 @@ web/                前端(Vite + React,独立于后端那条"直接跑 .ts"的�
       Composer.tsx     输入需求的框
   dist/             构建产物(npm install 时自动生成,不入库)
 
+benchmarks/faults/  故障注入:每类错误一个可复现用例,离线、零 key
+examples/evidence-only/
+                    不经过 mastic 运行时的接入示例
 test/               后端用例:node --test,全部离线
 ```
 
@@ -462,6 +588,7 @@ test/               后端用例:node --test,全部离线
 npm test               # 后端(node --test)+ 前端(vitest),全部离线
 npm run test:core      # 只跑后端
 npm run test:web       # 只跑前端
+npm run test:faults    # 故障注入矩阵(离线,零 API key)
 npm run typecheck      # tsc,两个项目都查
 ```
 
@@ -469,10 +596,15 @@ npm run typecheck      # tsc,两个项目都查
 
 - 文档 schema:没证据的 claim 收不下、空判据的验收收不下、越界路径挡得住
 - 证据重放:**编造的哈希判 contradicted**,而带时间戳的老实证据只判 drifted
+- 差异归因:输入变过 → 指向具体文件;输入没变 → 指向记录本身;没有快照 → 明说无法归因
 - 工具循环:交卷打回、卡住判定、**步数用尽强制交卷**
 - 禁词 lint:中文英文都抓得到,`allow_terms` 是唯一出口,引用不算主张
 - 裁定:含"worker 主动喊停 → blocked,即使别的都过了"
 - 并发闸门:同时最多跑 limit 个、某个抛错不会被吞掉
+- 追踪:父子 span 接得上、`gen_ai.usage.*` 落在调用上、异常记为 ERROR、
+  没配 endpoint 时一个请求都不发、导出失败不影响运行
+- 独立证据层:诚实报告判 verified、伪造判 contradicted、断链被抓、溯源查得到/查不到
+- 故障注入:对抗用例逐条拦截,老实用例零误杀
 - 前端:Markdown 渲染**不生成 HTML 字符串**(XSS 在结构上不成立)、
   裁定三态各有各的颜色、任务小节带得着可跳转的锚点、侧栏分层正确
 
@@ -481,11 +613,20 @@ npm run typecheck      # tsc,两个项目都查
 **为什么证据要重放两次。** 一次重放分不清"命令本身不稳定"和"这个哈希是编的"。
 第二次重跑是判别实验:稳定性是可观测的,编造因此无处藏身。
 
-**已知边界:重放分不清"工作区变了"和"数字是编的"。** 命令现在稳定、记录却对不上时,
-两种可能都说得通。真实例子:worker 记了 `ls -R src`,然后自己往 `src` 下建了文件,
-重放自然对不上。裁定仍然拦下它(这条证据确实不能作数,会重做),但**措辞不断言说谎**
-—— 分不清的事就不装作分得清。要避开这一类,证据就别用依赖可变状态的命令
-(列目录、`git status`、目录树),用文件内容哈希。
+**差异归因:把"分不清"缩到能说清的那部分。** 命令现在稳定、记录却对不上时,
+原先只能承认"工作区变了"和"数字是编的"分不清。现在 mastic 在记录一条命令时,
+顺手记下 worker 已经 `read_file` 读过哪些文件、当时哈希;重放对不上就拿它做归因:
+
+- **输入变过** → 点名那个文件:"`src/foo.ts` 从 a1b2… 变成 c3d4…,工作区变化足以
+  解释这次对不上,这份证据已经过期。" 仍然判 `contradicted`(证据确实不能作数),
+  但矛头指向工作区,不是诚实问题。
+- **输入没变** → "它读过的 N 个输入都没变,工作区解释不了,更像是记录本身不实。"
+- **没有输入快照** → 明说"无法归因",不猜。
+
+边界没有消失:命令可能读它从没 `read_file` 过的文件(比如 `npm test` 通过子进程
+读整个仓库),那部分输入不可见。所以结论只能到"我确实看见的那部分输入"为止。
+想完全避开这一类,证据就别依赖可变状态的命令(列目录、`git status`、目录树),
+用文件内容哈希。
 
 **为什么 `unverified` 是合法终态。** agent 会说谎,是因为 schema 逼着它把结论填满。
 给它一个体面的"我不知道",它才不需要编。
@@ -510,6 +651,15 @@ npm run typecheck      # tsc,两个项目都查
 而已经做的工作全丢了。现在用尽步数会强制交卷:做成什么写什么,没做完的
 写进 `unresolved`。**交一份不完整的报告是可以接受的;什么都不交不可以。**
 (这是实测出来的:自举任务在真实仓库里光读文件就花掉了二十多步。)
+
+**为什么证据层要有一个不依赖 agent 的入口。** 台账、重放、溯源链的概念价值
+大于 mastic 这个框架本身。把它们锁在 orchestrator 里,别人就只能"相信"它们有用;
+抽成 `mastic evidence` 之后,一个不跑 mastic 的运行时也能写一份报告、被同一套
+规则判定。这让"可验证"成为可以被单独采用的属性,而不是整框架的附属品。
+
+**为什么追踪用 OTel 而不是只写自己的事件流。** `events.jsonl` 是给人看的审计记录,
+格式自由、适合渲染;但它不能和任何现成管道对话。GenAI 语义约定是 vendor-neutral
+的契约,`gen_ai.usage.*` 这类字段跨工具可以聚合。两者并存:人看前者,机器看后者。
 
 **为什么禁词表里没有 TODO / FIXME。** 那不是"在编",是"没写完"。
 而且 `node --test` 的输出里天然有一行 `ℹ todo 0`,放进禁词表必然误伤每一份老实报告。

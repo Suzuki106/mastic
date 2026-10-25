@@ -8,6 +8,12 @@
  * 台账只在内存里活一轮任务;落盘的是展开后的报告 —— 那里写的是真值。
  */
 
+export interface InputRecord {
+  /** 相对工作目录。 */
+  path: string;
+  sha256: string;
+}
+
 export interface CommandRecord {
   /** C1、C2……按执行顺序编号。 */
   id: string;
@@ -19,6 +25,15 @@ export interface CommandRecord {
   stdoutBytes: number;
   durationMs: number;
   timedOut: boolean;
+  /**
+   * 执行这条命令之前,worker 已经用 `read_file` 读过哪些文件、当时的哈希。
+   *
+   * 这不是完整的依赖集(命令可能读它从没 `read_file` 过的文件),但它是
+   * mastic **确实看见过**的那部分输入。重放对不上时,拿它做归因:
+   * 输入变过,说明工作区变化足以解释差异;输入没变,就更可能是记录不实。
+   * 没有这份记录时,那两种可能永远分不清 —— 这是它存在的理由。
+   */
+  inputs?: InputRecord[];
 }
 
 export interface FileRecord {
@@ -51,6 +66,22 @@ export function recordFile(ledger: Ledger, record: Omit<FileRecord, "id">): File
   const entry: FileRecord = { id: `F${ledger.files.length + 1}`, ...record };
   ledger.files.push(entry);
   return entry;
+}
+
+/** 台账里读到过、且没有落在运行目录里的文件 —— 归因重放的输入集。 */
+export function readInputs(ledger: Ledger, limit = 12): InputRecord[] {
+  const latest = new Map<string, string>();
+
+  for (const file of ledger.files) {
+    if (file.action !== "read") continue;
+    if (file.path.startsWith(".mastic/")) continue;
+    latest.set(file.path, file.sha256);
+  }
+
+  return [...latest.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-limit)
+    .map(([path, sha256]) => ({ path, sha256 }));
 }
 
 export function findCommand(ledger: Ledger, id: string): CommandRecord | undefined {
